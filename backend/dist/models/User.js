@@ -4,6 +4,6 @@ const UserSchema = new Schema({
     email: { type: String, required: true, unique: true },
     passwordHash: { type: String, required: true },
     rolePreferences: { type: [String], default: [] },
-    interviewHistory: { type: Array, default: [] },
+    interviewHistory: { type: [String], default: [] },
 });
 export default mongoose.model("User", UserSchema);

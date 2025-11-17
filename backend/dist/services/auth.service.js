@@ -1,6 +1,6 @@
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
-import User from "../models/User";
+import User from "../models/user";
 const SALT_ROUNDS = 10;
 export class AuthService {
     // ============= SIGNUP =============

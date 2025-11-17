@@ -7,9 +7,9 @@ import bodyParser from "body-parser";
 import mongoose from "mongoose";
 
 // Routes
-import interviewRoutes from "./routes/interview.routes";
-import feedbackRoutes from "./routes/feedback.routes";
-import authRoutes from "./routes/auth.routes"; // ✅ NEW
+import interviewRoutes from "./routes/interview.routes.js";
+import feedbackRoutes from "./routes/feedback.routes.js";
+import authRoutes from "./routes/auth.routes.js"; // ✅ NEW
 
 // Load environment variables from backend/.env
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });

@@ -18,7 +18,7 @@ export class AuthService {
       passwordHash,
     });
 
-    return this.generateToken(user._id.toString());
+    return this.generateToken((user as any)._id.toString());
   }
 
   // ============= LOGIN =============
@@ -29,8 +29,9 @@ export class AuthService {
     const match = await bcrypt.compare(password, user.passwordHash);
     if (!match) throw new Error("Invalid email or password");
 
-    return this.generateToken(user._id.toString());
+    return this.generateToken((user as any)._id.toString());
   }
+
 
   // ============= GENERATE TOKEN =============
   static generateToken(id: string): string {

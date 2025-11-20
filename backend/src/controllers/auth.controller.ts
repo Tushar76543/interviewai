@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { AuthService } from "../services/auth.service";
+import { AuthService } from "../services/auth.service.js";
 
 const COOKIE_OPTIONS = {
   httpOnly: true,
@@ -8,7 +8,7 @@ const COOKIE_OPTIONS = {
 };
 
 export class AuthController {
-  
+
   // ======================
   // SIGNUP
   // ======================
@@ -60,6 +60,34 @@ export class AuthController {
   }
 
   // ======================
+  // GET ME (Current User)
+  // ======================
+  static async getMe(req: Request, res: Response) {
+    try {
+      const token = req.cookies.token;
+
+      if (!token) {
+        return res.status(401).json({
+          success: false,
+          message: "Not authenticated",
+        });
+      }
+
+      const user = await AuthService.getUserFromToken(token);
+
+      return res.json({
+        success: true,
+        user,
+      });
+    } catch (err: any) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired token",
+      });
+    }
+  }
+
+  // ======================
   // LOGOUT
   // ======================
   static async logout(req: Request, res: Response) {
@@ -70,3 +98,4 @@ export class AuthController {
     });
   }
 }
+

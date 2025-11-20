@@ -1,8 +1,8 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 
-// ✔ FIX: removed the extra "/api"
+// ✔ FIX: added "/api" prefix to match backend routes
 export async function login(email: string, password: string) {
-  const res = await fetch(`${API_URL}/auth/login`, {
+  const res = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -12,7 +12,7 @@ export async function login(email: string, password: string) {
 }
 
 export async function signup(name: string, email: string, password: string) {
-  const res = await fetch(`${API_URL}/auth/signup`, {
+  const res = await fetch(`${API_URL}/api/auth/signup`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -22,7 +22,7 @@ export async function signup(name: string, email: string, password: string) {
 }
 
 export async function logout() {
-  const res = await fetch(`${API_URL}/auth/logout`, {
+  const res = await fetch(`${API_URL}/api/auth/logout`, {
     method: "POST",
     credentials: "include",
   });
@@ -30,7 +30,7 @@ export async function logout() {
 }
 
 export async function getMe() {
-  const res = await fetch(`${API_URL}/auth/me`, {
+  const res = await fetch(`${API_URL}/api/auth/me`, {
     method: "GET",
     credentials: "include",
   });

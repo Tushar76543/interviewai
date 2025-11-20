@@ -1,4 +1,4 @@
-import { AuthService } from "../services/auth.service";
+import { AuthService } from "../services/auth.service.js";
 const COOKIE_OPTIONS = {
     httpOnly: true,
     sameSite: "lax",

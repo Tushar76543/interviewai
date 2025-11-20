@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { generateQuestion } from "../services/openai.service";
-import { authMiddleware } from "../middleware/auth.middleware";
+import { generateQuestion } from "../services/openai.service.js";
+import { authMiddleware } from "../middleware/auth.middleware.js";
 const router = Router();
 /**
  * 🔐 Protected route — only logged-in users can start interview

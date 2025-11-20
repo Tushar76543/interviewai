@@ -6,12 +6,15 @@ const router = Router();
  * 🔐 Protected route — only logged-in users can start interview
  */
 router.post("/start", authMiddleware, async (req, res) => {
+    console.log("🔹 POST /api/interview/start called");
+    console.log("🔹 Body:", req.body);
     try {
         const { role, difficulty, previousQuestions } = req.body;
         const question = await generateQuestion(role, difficulty, previousQuestions);
         res.json({ question });
     }
     catch (error) {
+        console.error("❌ Error in /start route:", error);
         res.status(500).json({
             error: error.message || "Failed to generate question.",
         });

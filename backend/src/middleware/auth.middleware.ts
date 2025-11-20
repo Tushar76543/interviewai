@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { Request, Response, NextFunction } from "express";
-import User from "../models/user";
+import User from "../models/user.js";
 
 export const authMiddleware = async (
   req: Request,
@@ -39,4 +39,3 @@ export const authMiddleware = async (
     return res.status(401).json({ message: "Invalid token" });
   }
 };
-

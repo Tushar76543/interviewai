@@ -50,6 +50,31 @@ export class AuthController {
         }
     }
     // ======================
+    // GET ME (Current User)
+    // ======================
+    static async getMe(req, res) {
+        try {
+            const token = req.cookies.token;
+            if (!token) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Not authenticated",
+                });
+            }
+            const user = await AuthService.getUserFromToken(token);
+            return res.json({
+                success: true,
+                user,
+            });
+        }
+        catch (err) {
+            return res.status(401).json({
+                success: false,
+                message: "Invalid or expired token",
+            });
+        }
+    }
+    // ======================
     // LOGOUT
     // ======================
     static async logout(req, res) {

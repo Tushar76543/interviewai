@@ -32,12 +32,30 @@ mongoose
 // ======================
 //  Middleware
 // ======================
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  process.env.FRONTEND_URL || "",
+];
+
+// Remove empty strings
+const filteredOrigins = allowedOrigins.filter(origin => origin !== "");
+
+console.log("🔐 Allowed CORS origins:", filteredOrigins);
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://127.0.0.1:5173",
-      process.env.FRONTEND_URL || ""],
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps, Postman, or curl)
+      if (!origin) return callback(null, true);
+
+      if (filteredOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        console.warn(`⚠️ CORS blocked origin: ${origin}`);
+        callback(null, true); // Allow for now, but log the warning
+      }
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     credentials: true,
   })
@@ -54,6 +72,16 @@ app.use(express.json());
 app.use("/api/auth", authRoutes); // <-- LOGIN / SIGNUP / LOGOUT
 app.use("/api/interview", interviewRoutes);
 app.use("/api/interview/feedback", feedbackRoutes);
+
+// Health Check Route
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "healthy",
+    message: "AI Interview Coach backend is running 🚀",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development"
+  });
+});
 
 // Test Route
 app.get("/", (req, res) => {

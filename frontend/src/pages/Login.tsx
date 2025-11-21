@@ -27,7 +27,15 @@ export default function Login() {
       return;
     }
 
+    // 🔥 Save JWT token locally
+    if (res.token) {
+      localStorage.setItem("token", res.token);
+    }
+
+    // 🔥 Save user details in auth context
     setUser(res.user);
+
+    setLoading(false);
     navigate("/dashboard");
   };
 
@@ -85,4 +93,3 @@ export default function Login() {
     </div>
   );
 }
-

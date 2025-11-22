@@ -1,0 +1,12 @@
+{
+    "name": "interviewai",
+    "private": true,
+    "scripts": {
+        "install": "npm --prefix frontend ci && npm --prefix backend ci",
+        "build": "npm --prefix frontend run build && npm --prefix backend run build",
+        "dev": "concurrently \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\""
+    },
+    "devDependencies": {
+        "concurrently": "^8.2.2"
+    }
+}

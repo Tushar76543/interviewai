@@ -1,6 +1,6 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
+// ✔ FIX: Use relative path for Vercel deployment
+const API_URL = "";
 
-// ✔ FIX: added "/api" prefix to match backend routes
 export async function login(email: string, password: string) {
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",

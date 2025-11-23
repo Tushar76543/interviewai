@@ -29,7 +29,8 @@ mongoose
 const allowedOrigins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-];
+    process.env.FRONTEND_URL || "", // Add production URL
+].filter(Boolean);
 app.use(cors({
     origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],

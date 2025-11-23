@@ -44,7 +44,7 @@ function Interview() {
     setFeedback(null);
     setAnswer("");
     try {
-      const res = await api.post("/api/interview/start", { role, difficulty });
+      const res = await api.post("/interview/start", { role, difficulty });
       setQuestion(res.data.question);
       setHistory([res.data.question]);
       speak(res.data.question.prompt); // 🔊 speak new question
@@ -62,7 +62,7 @@ function Interview() {
     setError("");
     setFeedback(null);
     try {
-      const res = await api.post("/api/interview/start", {
+      const res = await api.post("/interview/start", {
         role,
         difficulty,
         previousQuestions: history.map((q) => q.prompt),
@@ -90,7 +90,7 @@ function Interview() {
     setFeedback(null);
     setError("");
     try {
-      const res = await api.post("/api/interview/feedback", {
+      const res = await api.post("/interview/feedback", {
         role,
         question: question.prompt,
         answer,

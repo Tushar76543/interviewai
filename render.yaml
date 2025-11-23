@@ -1,16 +1,12 @@
 services:
-  # Backend Service
   - type: web
-    name: interviewai-backend
+    name: interviewai
     env: node
-    rootDir: backend
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:
       - key: NODE_VERSION
         value: 20.11.0
-      - key: PORT
-        value: 10000
       - key: MONGO_URI
         sync: false
       - key: JWT_SECRET
@@ -18,18 +14,7 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: FRONTEND_URL
-        sync: false
-
-  # Frontend Service
-  - type: web
-    name: interviewai-frontend
-    env: static
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    envVars:
-      - key: VITE_API_URL
         fromService:
           type: web
-          name: interviewai-backend
-          envVar: url
+          name: interviewai
+          property: host

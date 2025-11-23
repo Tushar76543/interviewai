@@ -6,6 +6,7 @@
         "install": "npm --prefix frontend ci && npm --prefix backend ci",
         "build": "npm --prefix frontend run build && npm --prefix backend run build",
         "dev": "concurrently \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
+        "start": "npm --prefix backend start",
         "bundle:api": "npx esbuild backend/src/serverless.ts --bundle --platform=node --packages=external --outfile=api/index.js --format=esm"
     },
     "devDependencies": {

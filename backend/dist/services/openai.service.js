@@ -3,7 +3,8 @@ import path from "path";
 import axios from "axios";
 // ✅ Load environment variables explicitly
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+// Use free model by default (no credits required). Override with OPENROUTER_MODEL for paid models.
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
 export async function generateQuestion(role, difficulty, previousQuestions = []) {
     // Build context for variety
     const previousList = previousQuestions.length
@@ -22,7 +23,7 @@ export async function generateQuestion(role, difficulty, previousQuestions = [])
     console.log("🔹 Using key starts with:", process.env.OPENROUTER_API_KEY?.slice(0, 10) + "...");
     try {
         const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-            model: "meta-llama/llama-3-70b-instruct",
+            model: OPENROUTER_MODEL,
             messages: [
                 { role: "system", content: "You are an AI Interview Coach." },
                 { role: "user", content: prompt },

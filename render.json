@@ -1,0 +1,5 @@
+{
+    "buildCommand": "cd backend && npm install && npm run deploy",
+    "publish": "backend/dist",
+    "ignoreCommand": "git log -1 --pretty=format:%s | grep -q \"\\[skip ci\\]\""
+}

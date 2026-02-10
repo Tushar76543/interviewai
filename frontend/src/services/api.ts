@@ -1,9 +1,31 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "/api",
+  baseURL: import.meta.env.VITE_API_URL
+    ? `${import.meta.env.VITE_API_URL}/api`
+    : "/api", // Uses Vite proxy in dev, or same-origin when served by backend
   withCredentials: true,
 });
+
+// Add Authorization header for cross-origin (when cookies don't work)
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Clear token on 401
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    if (err.response?.status === 401) {
+      localStorage.removeItem("token");
+    }
+    return Promise.reject(err);
+  }
+);
 
 export default api;
 

@@ -3,6 +3,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
 import Interview from "./pages/Interview";
+import History from "./pages/History";
 import ProtectedRoute from "./auth/ProtectedRoute";
 
 function App() {
@@ -28,6 +29,15 @@ function App() {
           element={
             <ProtectedRoute>
               <Interview />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/history"
+          element={
+            <ProtectedRoute>
+              <History />
             </ProtectedRoute>
           }
         />

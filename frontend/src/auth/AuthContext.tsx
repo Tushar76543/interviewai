@@ -1,16 +1,25 @@
-import { createContext, useContext, useEffect, useState } from "react";
-import { getMe } from "../api/auth";
+import { createContext, useContext, useEffect, useState, useCallback } from "react";
+import { getMe, logout as logoutApi } from "../api/auth";
+
+interface User {
+  _id: string;
+  name: string;
+  email: string;
+  role?: string;
+  createdAt?: string;
+}
 
 interface AuthContextType {
-  user: any | null;
-  setUser: React.Dispatch<React.SetStateAction<any | null>>;
+  user: User | null;
+  setUser: React.Dispatch<React.SetStateAction<User | null>>;
   loading: boolean;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<any | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -18,21 +27,31 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       .then((res) => {
         if (res.user) setUser(res.user);
       })
-      .catch((err) => {
-        console.error("Auth check failed:", err);
+      .catch(() => {
+        setUser(null);
       })
       .finally(() => {
         setLoading(false);
       });
   }, []);
 
+  const logout = useCallback(async () => {
+    try {
+      await logoutApi();
+    } finally {
+      localStorage.removeItem("token");
+      setUser(null);
+    }
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, setUser, loading }}>
+    <AuthContext.Provider value={{ user, setUser, loading, logout }}>
       {children}
     </AuthContext.Provider>
   );
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth must be used inside AuthProvider");

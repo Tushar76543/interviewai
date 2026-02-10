@@ -10,11 +10,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
     "axios": "^1.13.2",
+    "backend": "file:../backend",
+    "lucide-react": "^0.563.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-router-dom": "^7.9.6",
-    "react-speech-recognition": "^4.0.1"
+    "react-speech-recognition": "^4.0.1",
+    "react-webcam": "^7.2.0",
+    "recharts": "^3.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

@@ -19,7 +19,6 @@ export default function Login() {
     setErr("");
 
     const res = await login(email, password);
-    console.log("BACKEND LOGIN RESPONSE:", res);
 
     if (res.error || res.success === false) {
       setErr(res.message || "Login failed");

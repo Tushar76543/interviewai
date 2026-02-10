@@ -20,13 +20,15 @@ export default function Signup() {
     setErr("");
 
     const res = await signup(name, email, password);
-    if (res.message) {
-      setErr(res.message);
+    if (res.success === false) {
+      setErr(res.message || "Signup failed");
       setLoading(false);
-    } else {
-      setUser(res.user);
-      navigate("/dashboard");
+      return;
     }
+    setUser(res.user);
+    if (res.token) localStorage.setItem("token", res.token);
+    setLoading(false);
+    navigate("/dashboard");
   };
 
   return (
@@ -77,9 +79,13 @@ export default function Signup() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Create a strong password"
+              placeholder="Min 8 chars, 1 letter, 1 number"
               required
+              minLength={8}
             />
+            <span className="form-hint">
+              At least 8 characters, one letter, and one number
+            </span>
           </div>
 
           {err && <div className="error-message">{err}</div>}

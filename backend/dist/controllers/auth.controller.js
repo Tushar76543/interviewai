@@ -18,6 +18,7 @@ export class AuthController {
                 success: true,
                 message: "Signup successful",
                 user,
+                token, // For cross-origin: frontend stores and sends via Authorization header
             });
         }
         catch (err) {
@@ -40,6 +41,7 @@ export class AuthController {
                 success: true,
                 message: "Login successful",
                 user,
+                token, // For cross-origin: frontend stores and sends via Authorization header
             });
         }
         catch (err) {
@@ -54,7 +56,8 @@ export class AuthController {
     // ======================
     static async getMe(req, res) {
         try {
-            const token = req.cookies.token;
+            const token = req.cookies?.token ||
+                req.headers.authorization?.replace("Bearer ", "");
             if (!token) {
                 return res.status(401).json({
                     success: false,

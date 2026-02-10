@@ -1,8 +1,8 @@
-// ✔ FIX: Use relative path for Vercel deployment
-const API_URL = "";
+const API_BASE =
+  import.meta.env.VITE_API_URL || (typeof window !== "undefined" ? "" : "");
 
 export async function login(email: string, password: string) {
-  const res = await fetch(`${API_URL}/api/auth/login`, {
+  const res = await fetch(`${API_BASE}/api/auth/login`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -12,7 +12,7 @@ export async function login(email: string, password: string) {
 }
 
 export async function signup(name: string, email: string, password: string) {
-  const res = await fetch(`${API_URL}/api/auth/signup`, {
+  const res = await fetch(`${API_BASE}/api/auth/signup`, {
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
@@ -22,7 +22,7 @@ export async function signup(name: string, email: string, password: string) {
 }
 
 export async function logout() {
-  const res = await fetch(`${API_URL}/api/auth/logout`, {
+  const res = await fetch(`${API_BASE}/api/auth/logout`, {
     method: "POST",
     credentials: "include",
   });
@@ -30,9 +30,11 @@ export async function logout() {
 }
 
 export async function getMe() {
-  const res = await fetch(`${API_URL}/api/auth/me`, {
+  const token = localStorage.getItem("token");
+  const res = await fetch(`${API_BASE}/api/auth/me`, {
     method: "GET",
     credentials: "include",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   return res.json();
 }

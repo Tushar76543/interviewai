@@ -1,8 +1,8 @@
 {
     "version": 2,
-    "buildCommand": "npm --prefix frontend install && npm --prefix frontend run build",
+    "buildCommand": "cd frontend && npx tsc -b && npx vite build",
     "outputDirectory": "frontend/dist",
-    "installCommand": "npm install",
+    "installCommand": "npm --prefix frontend ci",
     "framework": null,
     "rewrites": [
         {

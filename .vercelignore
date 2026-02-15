@@ -1,0 +1,29 @@
+# Development files
+*.log
+.env
+.env.local
+.DS_Store
+
+# Dependencies
+**/node_modules/
+
+# Build artifacts (except api/index.js which is needed for serverless)
+backend/dist/
+frontend/dist/
+!api/index.js
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test files
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+
+# Documentation that's not needed in deployment
+TEST_REPORT.md

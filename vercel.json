@@ -1,14 +1,19 @@
 {
+    "version": 2,
+    "buildCommand": "npm run build",
+    "outputDirectory": "frontend/dist",
+    "installCommand": "npm install",
+    "framework": null,
     "rewrites": [
         {
-            "source": "/api/(.*)",
+            "source": "/api/:path*",
             "destination": "/api/index.js"
         }
     ],
     "functions": {
         "api/index.js": {
-            "maxDuration": 10
+            "maxDuration": 30,
+            "memory": 1024
         }
-    },
-    "outputDirectory": "frontend/dist"
+    }
 }

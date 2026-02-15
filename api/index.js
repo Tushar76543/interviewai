@@ -55,12 +55,14 @@ ${previousQuestions.join("\n")}` : "";
       }
     );
     const text = response.data.choices?.[0]?.message?.content;
-    if (!text) throw new Error("Empty response from model");
+    if (!text)
+      throw new Error("Empty response from model");
     try {
       return JSON.parse(text);
     } catch {
       const match = text.match(/\{[\s\S]*\}/);
-      if (match) return JSON.parse(match[0]);
+      if (match)
+        return JSON.parse(match[0]);
       throw new Error("Invalid JSON format: " + text);
     }
   } catch (err) {
@@ -343,7 +345,8 @@ var AuthService = class {
   // ============= SIGNUP =============
   static async signup(name, email, password) {
     const exists = await user_default.findOne({ email });
-    if (exists) throw new Error("User already exists");
+    if (exists)
+      throw new Error("User already exists");
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
     const user = await user_default.create({
       name,
@@ -355,9 +358,11 @@ var AuthService = class {
   // ============= LOGIN =============
   static async login(email, password) {
     const user = await user_default.findOne({ email });
-    if (!user) throw new Error("Invalid email or password");
+    if (!user)
+      throw new Error("Invalid email or password");
     const match = await bcrypt.compare(password, user.passwordHash);
-    if (!match) throw new Error("Invalid email or password");
+    if (!match)
+      throw new Error("Invalid email or password");
     return this.generateToken(user._id.toString());
   }
   // ============= GENERATE TOKEN =============
@@ -370,7 +375,8 @@ var AuthService = class {
   static async getUserFromToken(token) {
     const decoded = jwt2.verify(token, process.env.JWT_SECRET);
     const user = await user_default.findById(decoded.id).select("-passwordHash");
-    if (!user) throw new Error("User not found");
+    if (!user)
+      throw new Error("User not found");
     return user;
   }
 };
@@ -524,7 +530,8 @@ var router5 = Router4();
 var upload = multer({ storage: multer.memoryStorage() });
 router5.post("/analyze", upload.single("resume"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No resume uploaded" });
+    if (!req.file)
+      return res.status(400).json({ error: "No resume uploaded" });
     const buffer = req.file.buffer;
     const data = await pdf(buffer);
     const text = data.text;
@@ -586,7 +593,8 @@ console.log("\u2705 Loaded key prefix:", process.env.OPENROUTER_API_KEY?.slice(0
 var app = express2();
 var PORT = process.env.PORT || 5e3;
 app.use(async (req, res, next) => {
-  if (req.path === "/api/health") return next();
+  if (req.path === "/api/health")
+    return next();
   try {
     await db_default();
     next();
@@ -628,9 +636,18 @@ app.use("/api/resume", resume_routes_default);
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path3.dirname(__filename);
 var frontendPath = path3.join(__dirname, "../../frontend/dist");
+console.log("\u{1F4C2} Serving frontend from:", frontendPath);
 app.use(express2.static(frontendPath));
 app.get("*", (req, res) => {
-  res.sendFile(path3.join(frontendPath, "index.html"));
+  const indexPath = path3.join(frontendPath, "index.html");
+  if (!res.headersSent) {
+    res.sendFile(indexPath, (err) => {
+      if (err) {
+        console.error("\u274C Could not serve index.html:", err);
+        res.status(500).send("Server Error: Frontend not found.");
+      }
+    });
+  }
 });
 var app_default = app;
 

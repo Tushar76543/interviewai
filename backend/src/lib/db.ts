@@ -2,11 +2,8 @@ import mongoose from "mongoose";
 
 const MONGODB_URI = process.env.MONGO_URI as string;
 
-if (!MONGODB_URI) {
-    throw new Error(
-        "Please define the MONGODB_URI environment variable inside .env.local"
-    );
-}
+// Top-level check removed to prevent crash on module load. 
+// app.ts handles the env check gracefully.
 
 let cached = (global as any).mongoose;
 

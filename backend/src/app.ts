@@ -58,9 +58,10 @@ app.use(async (req, res, next) => {
         next();
     } catch (error: any) {
         console.error("❌ Database Connection Failed:", error);
-        res.status(500).json({
+        res.setHeader("Content-Type", "application/json");
+        return res.status(500).json({
             success: false,
-            message: "Database Connection Failed",
+            message: "Database Connection Failed. Please check if your MongoDB IP is whitelisted.",
             error: error.message
         });
     }
@@ -73,12 +74,11 @@ app.use(async (req, res, next) => {
 // 👉 Now only localhost allowed during development
 const allowedOrigins = [
     "http://localhost:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    process.env.FRONTEND_URL || "", // Add production URL
+    "https://interviewai-nine-blue.vercel.app",
+    process.env.FRONTEND_URL as string,
 ].filter(Boolean);
 
+console.log("🔹 Allowed Origins:", allowedOrigins);
 
 app.use(
     cors({
@@ -133,6 +133,19 @@ app.get("*", (req, res) => {
             }
         });
     }
+});
+
+// -----------------------------------------------------------------------------
+// GLOBAL ERROR HANDLER (Ensures JSON headers in production)
+// -----------------------------------------------------------------------------
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("💥 Global Error Handler:", err);
+    res.setHeader("Content-Type", "application/json");
+    res.status(err.status || 500).json({
+        success: false,
+        message: err.message || "Internal Server Error",
+        error: process.env.NODE_ENV === "production" ? "Internal Error" : err.stack
+    });
 });
 
 export default app;

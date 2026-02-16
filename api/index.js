@@ -555,7 +555,7 @@ async function dbConnect() {
   }
   const uri = process.env.MONGO_URI;
   if (!uri) {
-    throw new Error("MONGODB_URI is not defined");
+    throw new Error("MONGO_URI environment variable is not defined");
   }
   if (!cached.promise) {
     const opts = {
@@ -606,21 +606,20 @@ app.use(async (req, res, next) => {
     next();
   } catch (error) {
     console.error("\u274C Database Connection Failed:", error);
-    res.status(500).json({
+    res.setHeader("Content-Type", "application/json");
+    return res.status(500).json({
       success: false,
-      message: "Database Connection Failed",
+      message: "Database Connection Failed. Please check if your MongoDB IP is whitelisted.",
       error: error.message
     });
   }
 });
 var allowedOrigins = [
   "http://localhost:5173",
-  "http://localhost:5174",
-  "http://127.0.0.1:5173",
-  "http://127.0.0.1:5174",
-  process.env.FRONTEND_URL || ""
-  // Add production URL
+  "https://interviewai-nine-blue.vercel.app",
+  process.env.FRONTEND_URL
 ].filter(Boolean);
+console.log("\u{1F539} Allowed Origins:", allowedOrigins);
 app.use(
   cors({
     origin: allowedOrigins,
@@ -654,6 +653,15 @@ app.get("*", (req, res) => {
       }
     });
   }
+});
+app.use((err, req, res, next) => {
+  console.error("\u{1F4A5} Global Error Handler:", err);
+  res.setHeader("Content-Type", "application/json");
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "Internal Server Error",
+    error: process.env.NODE_ENV === "production" ? "Internal Error" : err.stack
+  });
 });
 var app_default = app;
 

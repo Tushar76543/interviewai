@@ -112,10 +112,12 @@ app.use("/api/resume", resumeRoutes);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// In production, the backend is in dist/, so we go up two levels to find frontend/dist
-const frontendPath = path.join(__dirname, "../../frontend/dist");
+// In production, resolve frontend/dist relative to project root
+const frontendPath = process.env.VERCEL
+    ? path.join(process.cwd(), "frontend/dist")
+    : path.join(__dirname, "../../frontend/dist");
 
-console.log("📂 Serving frontend from:", frontendPath);
+console.log("📂 Resolved Frontend Path:", frontendPath);
 
 app.use(express.static(frontendPath));
 

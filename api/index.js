@@ -84,7 +84,7 @@ var UserSchema = new Schema({
   rolePreferences: { type: [String], default: [] },
   interviewHistory: { type: [String], default: [] }
 });
-var user_default = mongoose.model("User", UserSchema);
+var user_default = mongoose.models.User || mongoose.model("User", UserSchema);
 
 // backend/src/middleware/auth.middleware.ts
 var authMiddleware = async (req, res, next) => {
@@ -137,7 +137,7 @@ var InterviewSessionSchema = new Schema2(
   { timestamps: true }
 );
 InterviewSessionSchema.index({ userId: 1, lastActivityAt: -1 });
-var interviewSession_default = mongoose2.model(
+var interviewSession_default = mongoose2.models.InterviewSession || mongoose2.model(
   "InterviewSession",
   InterviewSessionSchema
 );
@@ -648,8 +648,8 @@ app.use("/api/history", history_routes_default);
 app.use("/api/resume", resume_routes_default);
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path3.dirname(__filename);
-var frontendPath = path3.join(__dirname, "../../frontend/dist");
-console.log("\u{1F4C2} Serving frontend from:", frontendPath);
+var frontendPath = process.env.VERCEL ? path3.join(process.cwd(), "frontend/dist") : path3.join(__dirname, "../../frontend/dist");
+console.log("\u{1F4C2} Resolved Frontend Path:", frontendPath);
 app.use(express2.static(frontendPath));
 app.get("*", (req, res) => {
   const indexPath = path3.join(frontendPath, "index.html");

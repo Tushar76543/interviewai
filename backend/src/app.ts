@@ -14,9 +14,10 @@ import authRoutes from "./routes/auth.routes.js";
 import historyRoutes from "./routes/history.routes.js";
 import resumeRoutes from "./routes/resume.routes.js";
 // Load .env
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config(); // Simplified for Vercel
 
-console.log("✅ Loaded key prefix:", process.env.OPENROUTER_API_KEY?.slice(0, 10) + "...");
+const apiKey = process.env.OPENROUTER_API_KEY;
+console.log("✅ API Key check:", apiKey ? `Present (starts with ${apiKey.slice(0, 8)}...)` : "MISSING ❌");
 
 import dbConnect from "./lib/db.js";
 

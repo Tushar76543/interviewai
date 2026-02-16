@@ -583,8 +583,9 @@ async function dbConnect() {
 var db_default = dbConnect;
 
 // backend/src/app.ts
-dotenv3.config({ path: path3.resolve(process.cwd(), ".env") });
-console.log("\u2705 Loaded key prefix:", process.env.OPENROUTER_API_KEY?.slice(0, 10) + "...");
+dotenv3.config();
+var apiKey = process.env.OPENROUTER_API_KEY;
+console.log("\u2705 API Key check:", apiKey ? `Present (starts with ${apiKey.slice(0, 8)}...)` : "MISSING \u274C");
 var app = express2();
 var PORT = process.env.PORT || 5e3;
 app.use(async (req, res, next) => {

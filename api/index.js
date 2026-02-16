@@ -552,7 +552,6 @@ var resume_routes_default = router5;
 
 // backend/src/lib/db.ts
 import mongoose3 from "mongoose";
-var MONGODB_URI = process.env.MONGO_URI;
 var cached = global.mongoose;
 if (!cached) {
   cached = global.mongoose = { conn: null, promise: null };
@@ -561,15 +560,17 @@ async function dbConnect() {
   if (cached.conn) {
     return cached.conn;
   }
+  const uri = process.env.MONGO_URI;
+  if (!uri) {
+    throw new Error("MONGODB_URI is not defined");
+  }
   if (!cached.promise) {
     const opts = {
       bufferCommands: false,
       serverSelectionTimeoutMS: 5e3,
-      // Fail after 5s
       socketTimeoutMS: 1e4
-      // Close socket after 10s
     };
-    cached.promise = mongoose3.connect(MONGODB_URI, opts).then((mongoose4) => {
+    cached.promise = mongoose3.connect(uri, opts).then((mongoose4) => {
       return mongoose4;
     });
   }

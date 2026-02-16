@@ -1,10 +1,7 @@
 import mongoose from "mongoose";
 
-const MONGODB_URI = process.env.MONGO_URI as string;
-
-// Top-level check removed to prevent crash on module load. 
-// app.ts handles the env check gracefully.
-
+// Safe DB connection logic for serverless
+// Safe DB connection logic for serverless
 let cached = (global as any).mongoose;
 
 if (!cached) {
@@ -16,14 +13,19 @@ async function dbConnect() {
         return cached.conn;
     }
 
+    const uri = process.env.MONGO_URI;
+    if (!uri) {
+        throw new Error("MONGODB_URI is not defined");
+    }
+
     if (!cached.promise) {
         const opts = {
             bufferCommands: false,
-            serverSelectionTimeoutMS: 5000, // Fail after 5s
-            socketTimeoutMS: 10000, // Close socket after 10s
+            serverSelectionTimeoutMS: 5000,
+            socketTimeoutMS: 10000,
         };
 
-        cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
+        cached.promise = mongoose.connect(uri, opts).then((mongoose) => {
             return mongoose;
         });
     }

@@ -552,11 +552,6 @@ var resume_routes_default = router5;
 // backend/src/lib/db.ts
 import mongoose3 from "mongoose";
 var MONGODB_URI = process.env.MONGO_URI;
-if (!MONGODB_URI) {
-  throw new Error(
-    "Please define the MONGODB_URI environment variable inside .env.local"
-  );
-}
 var cached = global.mongoose;
 if (!cached) {
   cached = global.mongoose = { conn: null, promise: null };
@@ -595,6 +590,22 @@ var PORT = process.env.PORT || 5e3;
 app.use(async (req, res, next) => {
   if (req.path === "/api/health")
     return next();
+  if (!process.env.MONGO_URI) {
+    console.error("\u274C CRITICAL: MONGO_URI is missing in environment variables!");
+    return res.status(500).json({
+      success: false,
+      message: "Server Configuration Error: MONGO_URI is missing.",
+      error: "Missing Environment Variables"
+    });
+  }
+  if (!process.env.JWT_SECRET) {
+    console.error("\u274C CRITICAL: JWT_SECRET is missing in environment variables!");
+    return res.status(500).json({
+      success: false,
+      message: "Server Configuration Error: JWT_SECRET is missing.",
+      error: "Missing Environment Variables"
+    });
+  }
   try {
     await db_default();
     next();

@@ -526,7 +526,7 @@ import { Router as Router4 } from "express";
 import multer from "multer";
 import { createRequire } from "module";
 var require2 = createRequire(import.meta.url);
-var pdf = require2("pdf-parse");
+var pdf = require2("pdf-parse-fork");
 var router5 = Router4();
 var upload = multer({ storage: multer.memoryStorage() });
 router5.post("/analyze", upload.single("resume"), async (req, res) => {

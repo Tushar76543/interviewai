@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+const pdf = require("pdf-parse-fork");
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage() });

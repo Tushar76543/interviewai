@@ -3,8 +3,6 @@
     "type": "module",
     "private": true,
     "scripts": {
-        "install": "npm --prefix frontend ci",
-        "build": "npm --prefix frontend run build",
         "dev": "concurrently \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
         "start": "npm --prefix backend start",
         "bundle:api": "npx esbuild backend/src/serverless.ts --bundle --platform=node --packages=external --outfile=api/index.js --format=esm"
@@ -14,7 +12,7 @@
         "esbuild": "^0.25.0"
     },
     "dependencies": {
-        "axios": "^1.13.5",
+        "axios": "^1.7.9",
         "bcryptjs": "^2.4.3",
         "body-parser": "^1.20.3",
         "cookie-parser": "^1.4.7",

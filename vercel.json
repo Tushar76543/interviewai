@@ -1,6 +1,6 @@
 {
     "version": 2,
-    "buildCommand": "frontend/node_modules/.bin/tsc -b frontend && cd frontend && npx vite build",
+    "buildCommand": "npm --prefix frontend run build",
     "outputDirectory": "frontend/dist",
     "installCommand": "npm --prefix frontend ci",
     "framework": null,

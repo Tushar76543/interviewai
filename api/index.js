@@ -32,7 +32,8 @@ ${previousQuestions.join("\n")}` : "";
   {"qid":"q1","prompt":"<the question>","expectedPoints":["point1","point2"],"timeLimitSec":120}
   `;
   console.log("\u{1F539} Sending request to OpenRouter...");
-  console.log("\u{1F539} Using key starts with:", process.env.OPENROUTER_API_KEY?.slice(0, 10) + "...");
+  const authKey = process.env.OPENROUTER_API_KEY;
+  console.log("\u{1F539} Using key starts with:", authKey ? authKey.slice(0, 8) + "..." : "MISSING");
   try {
     const response = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -338,7 +339,7 @@ var feedback_routes_default = router2;
 import { Router as Router2 } from "express";
 
 // backend/src/services/auth.service.ts
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt2 from "jsonwebtoken";
 var SALT_ROUNDS = 10;
 var AuthService = class {

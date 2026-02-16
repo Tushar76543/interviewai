@@ -26,7 +26,8 @@ export async function generateQuestion(role: string, difficulty: string, previou
   `;
 
   console.log("🔹 Sending request to OpenRouter...");
-  console.log("🔹 Using key starts with:", process.env.OPENROUTER_API_KEY?.slice(0, 10) + "...");
+  const authKey = process.env.OPENROUTER_API_KEY;
+  console.log("🔹 Using key starts with:", authKey ? authKey.slice(0, 8) + "..." : "MISSING");
 
   try {
     const response = await axios.post(

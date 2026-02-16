@@ -32,6 +32,26 @@ app.use(async (req, res, next) => {
     // Skip DB connection for health check
     if (req.path === "/api/health") return next();
 
+    // 1. Check Env Vars
+    if (!process.env.MONGO_URI) {
+        console.error("❌ CRITICAL: MONGO_URI is missing in environment variables!");
+        return res.status(500).json({
+            success: false,
+            message: "Server Configuration Error: MONGO_URI is missing.",
+            error: "Missing Environment Variables"
+        });
+    }
+
+    if (!process.env.JWT_SECRET) {
+        console.error("❌ CRITICAL: JWT_SECRET is missing in environment variables!");
+        return res.status(500).json({
+            success: false,
+            message: "Server Configuration Error: JWT_SECRET is missing.",
+            error: "Missing Environment Variables"
+        });
+    }
+
+    // 2. Connect to DB
     try {
         await dbConnect();
         next();

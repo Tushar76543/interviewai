@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { login } from "../api/auth";
 import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
@@ -26,12 +26,6 @@ export default function Login() {
       return;
     }
 
-    // 🔥 Save JWT token locally
-    if (res.token) {
-      localStorage.setItem("token", res.token);
-    }
-
-    // 🔥 Save user details in auth context
     setUser(res.user);
 
     setLoading(false);

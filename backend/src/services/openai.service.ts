@@ -1,67 +1,128 @@
-import dotenv from "dotenv";
-import path from "path";
-import axios from "axios";
+﻿import axios from "axios";
 
-// ✅ Load environment variables explicitly
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+type GeneratedQuestion = {
+  qid: string;
+  prompt: string;
+  expectedPoints: string[];
+  timeLimitSec: number;
+};
 
-// Use free model by default (no credits required). Override with OPENROUTER_MODEL for paid models.
-const OPENROUTER_MODEL =
-  process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free";
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+const REQUEST_TIMEOUT_MS = 20000;
 
-export async function generateQuestion(role: string, difficulty: string, previousQuestions: string[] = []) {
-  // Build context for variety
-  const previousList = previousQuestions.length
-    ? `Avoid repeating any of these topics:\n${previousQuestions.join("\n")}`
+const cleanText = (value: string, maxLength: number) =>
+  value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+
+const extractJson = (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const match = trimmed.match(/\{[\s\S]*\}/);
+  return match ? match[0] : "";
+};
+
+const parseQuestion = (raw: string): GeneratedQuestion | null => {
+  try {
+    const parsed = JSON.parse(extractJson(raw)) as Partial<GeneratedQuestion>;
+    if (!parsed || typeof parsed.prompt !== "string") {
+      return null;
+    }
+
+    const prompt = cleanText(parsed.prompt, 1000);
+    const expectedPoints = Array.isArray(parsed.expectedPoints)
+      ? parsed.expectedPoints
+          .filter((item): item is string => typeof item === "string")
+          .map((item) => cleanText(item, 240))
+          .filter(Boolean)
+          .slice(0, 6)
+      : [];
+
+    return {
+      qid: typeof parsed.qid === "string" && parsed.qid.trim() ? parsed.qid.trim() : "q1",
+      prompt,
+      expectedPoints,
+      timeLimitSec:
+        typeof parsed.timeLimitSec === "number" && parsed.timeLimitSec > 0
+          ? Math.min(parsed.timeLimitSec, 600)
+          : 120,
+    };
+  } catch {
+    return null;
+  }
+};
+
+export async function generateQuestion(
+  role: string,
+  difficulty: string,
+  previousQuestions: string[] = []
+): Promise<GeneratedQuestion> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("AI provider is not configured");
+  }
+
+  const safeRole = cleanText(role || "Software Engineer", 80) || "Software Engineer";
+  const safeDifficulty = cleanText(difficulty || "Medium", 20) || "Medium";
+  const safePrevious = previousQuestions
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => cleanText(item, 500))
+    .filter(Boolean)
+    .slice(0, 20);
+
+  const previousList = safePrevious.length
+    ? `Avoid repeating these previous prompts:\n${safePrevious.join("\n")}`
     : "";
 
   const prompt = `
-  You are an expert interviewer.
-  Generate ONE unique ${difficulty} level interview question for a ${role}.
-  ${previousList}
-  The question should be fresh, non-repetitive, and cover a different subtopic.
-  
-  Return JSON in this format:
-  {"qid":"q1","prompt":"<the question>","expectedPoints":["point1","point2"],"timeLimitSec":120}
-  `;
+You are an expert interviewer.
+Generate one unique ${safeDifficulty} interview question for a ${safeRole} role.
+${previousList}
 
-  console.log("🔹 Sending request to OpenRouter...");
-  const authKey = process.env.OPENROUTER_API_KEY;
-  console.log("🔹 Using key starts with:", authKey ? authKey.slice(0, 8) + "..." : "MISSING");
+Return JSON only in this format:
+{"qid":"q1","prompt":"<question>","expectedPoints":["point1","point2"],"timeLimitSec":120}
+`;
+
+  const referer = process.env.FRONTEND_URL?.startsWith("http")
+    ? process.env.FRONTEND_URL
+    : "https://interviewai.app";
 
   try {
     const response = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
+      OPENROUTER_ENDPOINT,
       {
-        model: OPENROUTER_MODEL,
+        model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
         messages: [
           { role: "system", content: "You are an AI Interview Coach." },
           { role: "user", content: prompt },
         ],
-        temperature: 0.7, // higher temp => more creativity / less repetition
+        temperature: 0.7,
       },
       {
+        timeout: REQUEST_TIMEOUT_MS,
         headers: {
-          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "HTTP-Referer": "http://localhost:5173",
-          "X-Title": "AI Interview Coach",
+          Authorization: `Bearer ${apiKey}`,
+          "HTTP-Referer": referer,
+          "X-Title": "Interview AI Coach",
           "Content-Type": "application/json",
         },
       }
     );
 
-    const text = response.data.choices?.[0]?.message?.content;
-    if (!text) throw new Error("Empty response from model");
-
-    try {
-      return JSON.parse(text);
-    } catch {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) return JSON.parse(match[0]);
-      throw new Error("Invalid JSON format: " + text);
+    const text = response.data?.choices?.[0]?.message?.content;
+    if (typeof text !== "string" || !text.trim()) {
+      throw new Error("Empty response from AI model");
     }
-  } catch (err: any) {
-    console.error("❌ Error contacting OpenRouter:", err.response?.data || err.message);
-    throw new Error("Failed to generate question.");
+
+    const parsed = parseQuestion(text);
+    if (!parsed) {
+      throw new Error("Invalid question format from AI model");
+    }
+
+    return parsed;
+  } catch {
+    throw new Error("Failed to generate question");
   }
 }

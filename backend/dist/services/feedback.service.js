@@ -1,69 +1,124 @@
-import dotenv from "dotenv";
-import path from "path";
 import axios from "axios";
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
+const REQUEST_TIMEOUT_MS = 20000;
+const cleanText = (value, maxLength) => value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+const clampScore = (value) => {
+    if (typeof value !== "number" || Number.isNaN(value))
+        return 0;
+    return Math.max(0, Math.min(10, Number(value.toFixed(1))));
+};
+const extractJson = (value) => {
+    const trimmed = value.trim();
+    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+        return trimmed;
+    }
+    const match = trimmed.match(/\{[\s\S]*\}/);
+    return match ? match[0] : "";
+};
+const parseFeedback = (raw) => {
+    try {
+        const parsed = JSON.parse(extractJson(raw));
+        const feedback = parsed.feedback;
+        if (!feedback)
+            return null;
+        const sanitizedFeedback = {
+            technical: clampScore(feedback.technical),
+            clarity: clampScore(feedback.clarity),
+            completeness: clampScore(feedback.completeness),
+            suggestion: cleanText(typeof feedback.suggestion === "string" ? feedback.suggestion : "No suggestion generated", 320),
+        };
+        const followUp = parsed.followUp;
+        const sanitizedFollowUp = followUp && typeof followUp.prompt === "string"
+            ? {
+                qid: typeof followUp.qid === "string" ? cleanText(followUp.qid, 40) || "followup1" : "followup1",
+                prompt: cleanText(followUp.prompt, 1000),
+                expectedPoints: Array.isArray(followUp.expectedPoints)
+                    ? followUp.expectedPoints
+                        .filter((item) => typeof item === "string")
+                        .map((item) => cleanText(item, 240))
+                        .filter(Boolean)
+                        .slice(0, 6)
+                    : [],
+            }
+            : null;
+        return {
+            feedback: sanitizedFeedback,
+            followUp: sanitizedFollowUp,
+        };
+    }
+    catch {
+        return null;
+    }
+};
 export async function generateFeedback(role, question, answer) {
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey) {
+        throw new Error("AI provider is not configured");
+    }
+    const safeRole = cleanText(role, 80);
+    const safeQuestion = cleanText(question, 1000);
+    const safeAnswer = cleanText(answer, 5000);
     const prompt = `
-You are an expert interviewer evaluating a candidate for a ${role} position.
+You are an expert interviewer evaluating a candidate for a ${safeRole} position.
 
-Evaluate the following answer in 3 key areas:
-1️⃣ Technical correctness (0–10)
-2️⃣ Clarity & communication (0–10)
-3️⃣ Completeness (0–10)
+Evaluate the following answer in three areas:
+1. Technical correctness (0-10)
+2. Clarity and communication (0-10)
+3. Completeness (0-10)
 
-Also, write a short suggestion (1–2 lines) for improvement.
+Also provide a short suggestion (1-2 lines) for improvement.
+Finally, generate one short follow-up question.
 
-Finally, generate ONE short, meaningful follow-up question that builds on the candidate’s answer.
-
-Return JSON ONLY in this format:
+Return JSON only in this format:
 {
   "feedback": {
     "technical": 8.5,
     "clarity": 9,
     "completeness": 7.5,
-    "suggestion": "Try explaining the trade-offs between models."
+    "suggestion": "Explain trade-offs more clearly."
   },
   "followUp": {
     "qid": "followup1",
-    "prompt": "<the follow-up question>",
+    "prompt": "<follow-up question>",
     "expectedPoints": ["point1", "point2"]
   }
 }
 
-Question: ${question}
-Answer: ${answer}
+Question: ${safeQuestion}
+Answer: ${safeAnswer}
 `;
+    const referer = process.env.FRONTEND_URL?.startsWith("http")
+        ? process.env.FRONTEND_URL
+        : "https://interviewai.app";
     try {
-        const response = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-            model: process.env.OPENROUTER_MODEL || "meta-llama/llama-3.3-70b-instruct:free",
+        const response = await axios.post(OPENROUTER_ENDPOINT, {
+            model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
             messages: [
                 { role: "system", content: "You are a strict but fair AI interview evaluator." },
                 { role: "user", content: prompt },
             ],
             temperature: 0.4,
         }, {
+            timeout: REQUEST_TIMEOUT_MS,
             headers: {
-                "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-                "HTTP-Referer": "http://localhost:5173",
-                "X-Title": "AI Interview Coach",
+                Authorization: `Bearer ${apiKey}`,
+                "HTTP-Referer": referer,
+                "X-Title": "Interview AI Coach",
                 "Content-Type": "application/json",
             },
         });
-        const text = response.data.choices?.[0]?.message?.content;
-        const match = text.match(/\{[\s\S]*\}/);
-        const parsed = match ? JSON.parse(match[0]) : null;
-        return parsed || {
-            feedback: {
-                technical: 0,
-                clarity: 0,
-                completeness: 0,
-                suggestion: "No feedback generated.",
-            },
-            followUp: null,
-        };
+        const text = response.data?.choices?.[0]?.message?.content;
+        if (typeof text !== "string" || !text.trim()) {
+            throw new Error("Empty response from AI model");
+        }
+        const parsed = parseFeedback(text);
+        if (!parsed) {
+            throw new Error("Invalid feedback format from AI model");
+        }
+        return parsed;
     }
-    catch (err) {
-        console.error("❌ Feedback error:", err.response?.data || err.message);
-        throw new Error("Feedback generation failed.");
+    catch {
+        throw new Error("Feedback generation failed");
     }
 }

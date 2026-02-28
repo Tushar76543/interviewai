@@ -1,17 +1,22 @@
-import { Request, Response } from "express";
+﻿import { Request, Response, CookieOptions } from "express";
 import { AuthService } from "../services/auth.service.js";
 
-const COOKIE_OPTIONS = {
+const isProduction = process.env.NODE_ENV === "production";
+
+const COOKIE_OPTIONS: CookieOptions = {
   httpOnly: true,
-  sameSite: "lax" as const,
-  maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+  secure: isProduction,
+  sameSite: isProduction ? "none" : "lax",
+  path: "/",
+  maxAge: 1000 * 60 * 60 * 24 * 7,
+};
+
+const CLEAR_COOKIE_OPTIONS: CookieOptions = {
+  ...COOKIE_OPTIONS,
+  maxAge: 0,
 };
 
 export class AuthController {
-
-  // ======================
-  // SIGNUP
-  // ======================
   static async signup(req: Request, res: Response) {
     try {
       const { name, email, password } = req.body;
@@ -25,19 +30,16 @@ export class AuthController {
         success: true,
         message: "Signup successful",
         user,
-        token, // For cross-origin: frontend stores and sends via Authorization header
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Signup failed";
       return res.status(400).json({
         success: false,
-        message: err.message,
+        message,
       });
     }
   }
 
-  // ======================
-  // LOGIN
-  // ======================
   static async login(req: Request, res: Response) {
     try {
       const { email, password } = req.body;
@@ -51,19 +53,16 @@ export class AuthController {
         success: true,
         message: "Login successful",
         user,
-        token, // For cross-origin: frontend stores and sends via Authorization header
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Login failed";
       return res.status(400).json({
         success: false,
-        message: err.message,
+        message,
       });
     }
   }
 
-  // ======================
-  // GET ME (Current User)
-  // ======================
   static async getMe(req: Request, res: Response) {
     try {
       const token =
@@ -83,7 +82,7 @@ export class AuthController {
         success: true,
         user,
       });
-    } catch (err: any) {
+    } catch {
       return res.status(401).json({
         success: false,
         message: "Invalid or expired token",
@@ -91,15 +90,11 @@ export class AuthController {
     }
   }
 
-  // ======================
-  // LOGOUT
-  // ======================
-  static async logout(req: Request, res: Response) {
-    res.clearCookie("token");
+  static async logout(_req: Request, res: Response) {
+    res.clearCookie("token", CLEAR_COOKIE_OPTIONS);
     return res.json({
       success: true,
       message: "Logged out",
     });
   }
 }
-

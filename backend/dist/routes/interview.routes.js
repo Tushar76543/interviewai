@@ -2,15 +2,17 @@ import { Router } from "express";
 import { generateQuestion } from "../services/openai.service.js";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import InterviewSession from "../models/interviewSession.js";
+import { interviewStartValidation, handleValidationErrors, } from "../middleware/validation.middleware.js";
+import { interviewRateLimit } from "../middleware/rateLimit.middleware.js";
 const router = Router();
-/**
- * 🔐 Protected route — only logged-in users can start interview
- */
-router.post("/start", authMiddleware, async (req, res) => {
+router.post("/start", authMiddleware, interviewRateLimit, ...interviewStartValidation, handleValidationErrors, async (req, res) => {
     try {
         const user = req.user;
         const { role, difficulty, previousQuestions, sessionId } = req.body;
-        const question = await generateQuestion(role || "Software Engineer", difficulty || "Medium", previousQuestions || []);
+        const resolvedRole = role || "Software Engineer";
+        const resolvedDifficulty = difficulty || "Medium";
+        const prior = Array.isArray(previousQuestions) ? previousQuestions : [];
+        const question = await generateQuestion(resolvedRole, resolvedDifficulty, prior);
         let session;
         if (sessionId) {
             session = await InterviewSession.findOneAndUpdate({ _id: sessionId, userId: user._id }, {
@@ -23,20 +25,27 @@ router.post("/start", authMiddleware, async (req, res) => {
         else {
             session = await InterviewSession.create({
                 userId: user._id,
-                role: role || "Software Engineer",
-                difficulty: difficulty || "Medium",
+                role: resolvedRole,
+                difficulty: resolvedDifficulty,
                 questions: [{ question: question.prompt, answer: "" }],
             });
         }
         if (!session) {
-            return res.status(404).json({ error: "Session not found." });
+            return res.status(404).json({
+                success: false,
+                message: "Session not found",
+            });
         }
-        res.json({ question, sessionId: session._id });
+        return res.json({ question, sessionId: session._id });
     }
     catch (error) {
-        console.error("❌ Error in /start route:", error);
-        res.status(500).json({
-            error: error.message || "Failed to generate question.",
+        const isProduction = process.env.NODE_ENV === "production";
+        const message = error instanceof Error && !isProduction
+            ? error.message
+            : "Failed to generate question";
+        return res.status(500).json({
+            success: false,
+            message,
         });
     }
 });

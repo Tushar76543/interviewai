@@ -1,24 +1,26 @@
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import User from "../models/user.js";
-const SALT_ROUNDS = 10;
+const SALT_ROUNDS = 12;
+const TOKEN_TTL = "7d";
+const normalizeEmail = (email) => email.trim().toLowerCase();
 export class AuthService {
-    // ============= SIGNUP =============
     static async signup(name, email, password) {
-        const exists = await User.findOne({ email });
+        const normalizedEmail = normalizeEmail(email);
+        const exists = await User.findOne({ email: normalizedEmail });
         if (exists)
             throw new Error("User already exists");
         const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
         const user = await User.create({
-            name,
-            email,
+            name: name.trim(),
+            email: normalizedEmail,
             passwordHash,
         });
         return this.generateToken(user._id.toString());
     }
-    // ============= LOGIN =============
     static async login(email, password) {
-        const user = await User.findOne({ email });
+        const normalizedEmail = normalizeEmail(email);
+        const user = await User.findOne({ email: normalizedEmail });
         if (!user)
             throw new Error("Invalid email or password");
         const match = await bcrypt.compare(password, user.passwordHash);
@@ -26,15 +28,22 @@ export class AuthService {
             throw new Error("Invalid email or password");
         return this.generateToken(user._id.toString());
     }
-    // ============= GENERATE TOKEN =============
     static generateToken(id) {
-        return jwt.sign({ id }, process.env.JWT_SECRET, {
-            expiresIn: "7d",
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+            throw new Error("JWT secret is not configured");
+        }
+        return jwt.sign({ id }, secret, {
+            expiresIn: TOKEN_TTL,
+            algorithm: "HS256",
         });
     }
-    // ============= GET USER FROM TOKEN =============
     static async getUserFromToken(token) {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+            throw new Error("JWT secret is not configured");
+        }
+        const decoded = jwt.verify(token, secret);
         const user = await User.findById(decoded.id).select("-passwordHash");
         if (!user)
             throw new Error("User not found");

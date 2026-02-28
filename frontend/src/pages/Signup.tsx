@@ -1,4 +1,4 @@
-import { useState } from "react";
+﻿import { useState } from "react";
 import { signup } from "../api/auth";
 import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
@@ -25,8 +25,8 @@ export default function Signup() {
       setLoading(false);
       return;
     }
+
     setUser(res.user);
-    if (res.token) localStorage.setItem("token", res.token);
     setLoading(false);
     navigate("/dashboard");
   };
@@ -103,4 +103,3 @@ export default function Signup() {
     </div>
   );
 }
-

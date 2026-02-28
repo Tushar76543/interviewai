@@ -1,13 +1,17 @@
 import { AuthService } from "../services/auth.service.js";
+const isProduction = process.env.NODE_ENV === "production";
 const COOKIE_OPTIONS = {
     httpOnly: true,
-    sameSite: "lax",
-    maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    path: "/",
+    maxAge: 1000 * 60 * 60 * 24 * 7,
+};
+const CLEAR_COOKIE_OPTIONS = {
+    ...COOKIE_OPTIONS,
+    maxAge: 0,
 };
 export class AuthController {
-    // ======================
-    // SIGNUP
-    // ======================
     static async signup(req, res) {
         try {
             const { name, email, password } = req.body;
@@ -18,19 +22,16 @@ export class AuthController {
                 success: true,
                 message: "Signup successful",
                 user,
-                token, // For cross-origin: frontend stores and sends via Authorization header
             });
         }
         catch (err) {
+            const message = err instanceof Error ? err.message : "Signup failed";
             return res.status(400).json({
                 success: false,
-                message: err.message,
+                message,
             });
         }
     }
-    // ======================
-    // LOGIN
-    // ======================
     static async login(req, res) {
         try {
             const { email, password } = req.body;
@@ -41,19 +42,16 @@ export class AuthController {
                 success: true,
                 message: "Login successful",
                 user,
-                token, // For cross-origin: frontend stores and sends via Authorization header
             });
         }
         catch (err) {
+            const message = err instanceof Error ? err.message : "Login failed";
             return res.status(400).json({
                 success: false,
-                message: err.message,
+                message,
             });
         }
     }
-    // ======================
-    // GET ME (Current User)
-    // ======================
     static async getMe(req, res) {
         try {
             const token = req.cookies?.token ||
@@ -70,18 +68,15 @@ export class AuthController {
                 user,
             });
         }
-        catch (err) {
+        catch {
             return res.status(401).json({
                 success: false,
                 message: "Invalid or expired token",
             });
         }
     }
-    // ======================
-    // LOGOUT
-    // ======================
-    static async logout(req, res) {
-        res.clearCookie("token");
+    static async logout(_req, res) {
+        res.clearCookie("token", CLEAR_COOKIE_OPTIONS);
         return res.json({
             success: true,
             message: "Logged out",

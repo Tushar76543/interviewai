@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useState, useCallback } from "react";
+﻿import { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { getMe, logout as logoutApi } from "../api/auth";
+import { ensureCsrfToken } from "../services/api";
 
 interface User {
   _id: string;
@@ -23,15 +24,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getMe()
-      .then((res) => {
-        if (res.user) setUser(res.user);
-      })
-      .catch(() => {
-        setUser(null);
-      })
+    ensureCsrfToken()
+      .catch(() => undefined)
       .finally(() => {
-        setLoading(false);
+        getMe()
+          .then((res) => {
+            if (res.user) setUser(res.user);
+          })
+          .catch(() => {
+            setUser(null);
+          })
+          .finally(() => {
+            setLoading(false);
+          });
       });
   }, []);
 
@@ -39,7 +44,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     try {
       await logoutApi();
     } finally {
-      localStorage.removeItem("token");
       setUser(null);
     }
   }, []);
@@ -57,4 +61,3 @@ export const useAuth = () => {
   if (!ctx) throw new Error("useAuth must be used inside AuthProvider");
   return ctx;
 };
-

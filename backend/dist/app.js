@@ -1,94 +1,135 @@
 import dotenv from "dotenv";
+import fs from "fs";
 import path from "path";
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import bodyParser from "body-parser";
+import mongoose from "mongoose";
 import { fileURLToPath } from "url";
-// Routes
 import interviewRoutes from "./routes/interview.routes.js";
 import feedbackRoutes from "./routes/feedback.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import historyRoutes from "./routes/history.routes.js";
 import resumeRoutes from "./routes/resume.routes.js";
-// Load .env
-dotenv.config({ path: path.resolve(process.cwd(), ".env") });
-console.log("✅ Loaded key prefix:", process.env.OPENROUTER_API_KEY?.slice(0, 10) + "...");
 import dbConnect from "./lib/db.js";
-// ... imports
+import { csrfCookieMiddleware, requireCsrfProtection } from "./middleware/csrf.middleware.js";
+dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 5000;
-// ======================
-//  DB Connection Middleware
-// ======================
-app.use(async (req, res, next) => {
-    // Skip DB connection for health check
-    if (req.path === "/api/health")
-        return next();
+const isProduction = process.env.NODE_ENV === "production";
+const normalizeOrigin = (origin) => {
+    const trimmed = origin.trim();
+    if (!trimmed)
+        return "";
+    try {
+        const url = trimmed.startsWith("http://") || trimmed.startsWith("https://")
+            ? new URL(trimmed)
+            : new URL(`https://${trimmed}`);
+        return url.origin;
+    }
+    catch {
+        return "";
+    }
+};
+const configuredOrigins = [
+    process.env.FRONTEND_URL ?? "",
+    ...(process.env.CORS_ORIGINS ?? "").split(","),
+]
+    .map(normalizeOrigin)
+    .filter(Boolean);
+const defaultDevOrigins = isProduction ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"];
+const allowedOrigins = new Set([...defaultDevOrigins, ...configuredOrigins]);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const frontendCandidates = [
+    path.join(process.cwd(), "frontend", "dist"),
+    path.join(__dirname, "../../frontend/dist"),
+];
+const frontendPath = frontendCandidates.find((candidate) => fs.existsSync(candidate));
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+app.use((req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()");
+    if (isProduction) {
+        res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    }
+    next();
+});
+app.use(cors({
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.has(origin)) {
+            callback(null, true);
+            return;
+        }
+        callback(new Error("Not allowed by CORS"));
+    },
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+    credentials: true,
+}));
+app.use(cookieParser());
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+app.use("/api", csrfCookieMiddleware);
+app.get("/api/health", (_req, res) => {
+    res.status(200).json({
+        status: "ok",
+        uptime: Math.round(process.uptime()),
+        timestamp: new Date().toISOString(),
+        dbState: mongoose.connection.readyState,
+    });
+});
+app.use("/api", requireCsrfProtection);
+app.use(async (req, _res, next) => {
+    if (!req.path.startsWith("/api") || req.path === "/api/health") {
+        next();
+        return;
+    }
     try {
         await dbConnect();
         next();
     }
     catch (error) {
-        console.error("❌ Database Connection Failed:", error);
-        res.status(500).json({
-            success: false,
-            message: "Database Connection Failed",
-            error: error.message
-        });
+        next(error);
     }
 });
-// ======================
-//  Middleware
-// ======================
-// 👉 Now only localhost allowed during development
-const allowedOrigins = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
-    process.env.FRONTEND_URL || "", // Add production URL
-].filter(Boolean);
-app.use(cors({
-    origin: allowedOrigins,
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    credentials: true,
-}));
-app.use(cookieParser());
-app.use(bodyParser.json());
-app.use(express.json());
-// Health Check
-app.get("/api/health", (req, res) => {
-    res.status(200).json({ status: "ok", message: "Server is running" });
-});
-// ======================
-//  API Routes
-// ======================
 app.use("/api/auth", authRoutes);
 app.use("/api/interview", interviewRoutes);
 app.use("/api/interview/feedback", feedbackRoutes);
 app.use("/api/history", historyRoutes);
 app.use("/api/resume", resumeRoutes);
-// ======================
-//  Serve Frontend Build (PRODUCTION ONLY)
-// ======================
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-// In production, the backend is in dist/, so we go up two levels to find frontend/dist
-const frontendPath = path.join(__dirname, "../../frontend/dist");
-console.log("📂 Serving frontend from:", frontendPath);
-app.use(express.static(frontendPath));
-// Catch-all → Send React index.html for any request that isn't an API call
-app.get("*", (req, res) => {
-    // Check if file exists, useful for debugging 404s
-    const indexPath = path.join(frontendPath, "index.html");
-    if (!res.headersSent) {
-        res.sendFile(indexPath, (err) => {
-            if (err) {
-                console.error("❌ Could not serve index.html:", err);
-                res.status(500).send("Server Error: Frontend not found.");
-            }
+app.use("/api", (_req, res) => {
+    res.status(404).json({
+        success: false,
+        message: "API route not found",
+    });
+});
+if (isProduction && frontendPath) {
+    app.use(express.static(frontendPath));
+    app.get(/^\/(?!api).*/, (_req, res) => {
+        res.sendFile(path.join(frontendPath, "index.html"));
+    });
+}
+app.use((err, _req, res, _next) => {
+    if (err instanceof Error && err.message === "Not allowed by CORS") {
+        res.status(403).json({
+            success: false,
+            message: "Origin not allowed",
         });
+        return;
     }
+    const statusCode = typeof err === "object" &&
+        err !== null &&
+        "status" in err &&
+        typeof err.status === "number"
+        ? err.status
+        : 500;
+    const message = err instanceof Error && !isProduction ? err.message : "Internal server error";
+    res.status(statusCode).json({
+        success: false,
+        message,
+    });
 });
 export default app;

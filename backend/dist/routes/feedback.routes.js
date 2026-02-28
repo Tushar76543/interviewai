@@ -3,8 +3,9 @@ import { generateFeedback } from "../services/feedback.service.js";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import { feedbackValidation, handleValidationErrors, } from "../middleware/validation.middleware.js";
 import InterviewSession from "../models/interviewSession.js";
+import { feedbackRateLimit } from "../middleware/rateLimit.middleware.js";
 const router = express.Router();
-router.post("/", authMiddleware, ...feedbackValidation, handleValidationErrors, async (req, res) => {
+router.post("/", authMiddleware, feedbackRateLimit, ...feedbackValidation, handleValidationErrors, async (req, res) => {
     try {
         const user = req.user;
         const { role, question, answer, sessionId } = req.body;
@@ -28,10 +29,13 @@ router.post("/", authMiddleware, ...feedbackValidation, handleValidationErrors, 
                 await session.save();
             }
         }
-        res.json(result);
+        return res.json(result);
     }
-    catch (error) {
-        res.status(500).json({ error: "Failed to generate feedback." });
+    catch {
+        return res.status(500).json({
+            success: false,
+            message: "Failed to generate feedback",
+        });
     }
 });
 export default router;

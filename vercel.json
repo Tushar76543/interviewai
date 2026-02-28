@@ -1,6 +1,6 @@
 {
     "version": 2,
-    "buildCommand": "cd frontend && npm run build",
+    "buildCommand": "npm run bundle:api && cd frontend && npm run build",
     "outputDirectory": "frontend/dist",
     "installCommand": "npm install && cd backend && npm install && cd ../frontend && npm install",
     "framework": null,

@@ -1,6 +1,3 @@
-// backend/src/serverless.ts
-import serverless from "serverless-http";
-
 // backend/src/app.ts
 import dotenv from "dotenv";
 import fs from "fs";
@@ -1132,7 +1129,7 @@ app.use(
 var app_default = app;
 
 // backend/src/serverless.ts
-var serverless_default = serverless(app_default);
+var serverless_default = app_default;
 export {
   serverless_default as default
 };

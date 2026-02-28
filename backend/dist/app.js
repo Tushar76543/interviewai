@@ -73,17 +73,23 @@ app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use("/api", csrfCookieMiddleware);
-app.get("/api/health", (_req, res) => {
+const healthHandler = (_req, res) => {
     res.status(200).json({
         status: "ok",
         uptime: Math.round(process.uptime()),
         timestamp: new Date().toISOString(),
         dbState: mongoose.connection.readyState,
     });
-});
+};
+app.get("/api/health", healthHandler);
+app.get("/health", healthHandler);
 app.use("/api", requireCsrfProtection);
 app.use(async (req, _res, next) => {
-    if (!req.path.startsWith("/api") || req.path === "/api/health") {
+    const requestPath = (req.originalUrl || req.url || req.path).split("?")[0].toLowerCase();
+    const isHealthRoute = requestPath.endsWith("/health");
+    const isCsrfRoute = requestPath.endsWith("/auth/csrf");
+    const isApiRequest = requestPath.startsWith("/api/");
+    if (!isApiRequest || isHealthRoute || isCsrfRoute) {
         next();
         return;
     }

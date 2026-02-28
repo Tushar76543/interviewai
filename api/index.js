@@ -1077,22 +1077,24 @@ var healthHandler = (_req, res) => {
 app.get("/api/health", healthHandler);
 app.get("/health", healthHandler);
 app.use("/api", requireCsrfProtection);
-app.use(async (req, _res, next) => {
-  const requestPath = (req.originalUrl || req.url || req.path).split("?")[0].toLowerCase();
-  const isHealthRoute = requestPath.endsWith("/health");
-  const isCsrfRoute = requestPath.endsWith("/auth/csrf");
-  const isApiRequest = requestPath.startsWith("/api/");
-  if (!isApiRequest || isHealthRoute || isCsrfRoute) {
-    next();
-    return;
-  }
+var requireDb = async (_req, _res, next) => {
   try {
     await db_default();
     next();
   } catch (error) {
     next(error);
   }
+};
+app.use("/api/auth", (req, res, next) => {
+  if (req.method === "GET" && req.path === "/csrf") {
+    next();
+    return;
+  }
+  requireDb(req, res, next);
 });
+app.use("/api/interview", requireDb);
+app.use("/api/history", requireDb);
+app.use("/api/resume", requireDb);
 app.use("/api/auth", auth_routes_default);
 app.use("/api/interview", interview_routes_default);
 app.use("/api/interview/feedback", feedback_routes_default);

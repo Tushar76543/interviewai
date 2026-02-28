@@ -1,11 +1,7 @@
 ﻿import { Request, Router } from "express";
 import multer from "multer";
-import { createRequire } from "module";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import { resumeRateLimit } from "../middleware/rateLimit.middleware.js";
-
-const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse-fork");
 
 type ResumeRequest = Request & {
   file?: {
@@ -62,6 +58,24 @@ const extractSkills = (text: string) => {
   return commonSkills.filter((skill) => normalized.includes(skill.toLowerCase())).slice(0, 10);
 };
 
+let pdfParser: ((buffer: Buffer) => Promise<{ text?: string }>) | null = null;
+
+const getPdfParser = async () => {
+  if (pdfParser) return pdfParser;
+
+  const mod = (await import("pdf-parse-fork")) as unknown as {
+    default?: (buffer: Buffer) => Promise<{ text?: string }>;
+  };
+
+  const parser = mod.default;
+  if (typeof parser !== "function") {
+    throw new Error("PDF parser module failed to load");
+  }
+
+  pdfParser = parser;
+  return pdfParser;
+};
+
 router.post(
   "/analyze",
   authMiddleware,
@@ -100,6 +114,7 @@ router.post(
         });
       }
 
+      const pdf = await getPdfParser();
       const data = await pdf(typedReq.file.buffer);
       const text = (data.text || "").replace(/\s+/g, " ").trim();
 

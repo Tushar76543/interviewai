@@ -3,6 +3,18 @@
 const API_BASE =
   import.meta.env.VITE_API_URL || (typeof window !== "undefined" ? "" : "");
 
+const parseApiResponse = async (res: Response) => {
+  const raw = await res.text();
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {
+      success: false,
+      message: raw || `Request failed with status ${res.status}`,
+    };
+  }
+};
+
 const getCsrfHeaders = () => {
   const token = getCsrfToken();
   return token ? { "X-CSRF-Token": token } : {};
@@ -20,7 +32,7 @@ export async function login(email: string, password: string) {
     },
     body: JSON.stringify({ email, password }),
   });
-  return res.json();
+  return parseApiResponse(res);
 }
 
 export async function signup(name: string, email: string, password: string) {
@@ -35,7 +47,7 @@ export async function signup(name: string, email: string, password: string) {
     },
     body: JSON.stringify({ name, email, password }),
   });
-  return res.json();
+  return parseApiResponse(res);
 }
 
 export async function logout() {
@@ -46,7 +58,7 @@ export async function logout() {
     credentials: "include",
     headers: getCsrfHeaders(),
   });
-  return res.json();
+  return parseApiResponse(res);
 }
 
 export async function getMe() {
@@ -54,7 +66,7 @@ export async function getMe() {
     method: "GET",
     credentials: "include",
   });
-  return res.json();
+  return parseApiResponse(res);
 }
 
 export async function getCsrf() {
@@ -62,5 +74,5 @@ export async function getCsrf() {
     method: "GET",
     credentials: "include",
   });
-  return res.json();
+  return parseApiResponse(res);
 }

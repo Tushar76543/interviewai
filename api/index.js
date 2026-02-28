@@ -871,9 +871,6 @@ var history_routes_default = router4;
 // backend/src/routes/resume.routes.ts
 import { Router as Router4 } from "express";
 import multer from "multer";
-import { createRequire } from "module";
-var require2 = createRequire(import.meta.url);
-var pdf = require2("pdf-parse-fork");
 var router5 = Router4();
 var MAX_RESUME_SIZE = Number.parseInt(
   process.env.MAX_RESUME_FILE_SIZE_BYTES ?? `${2 * 1024 * 1024}`,
@@ -912,6 +909,17 @@ var extractSkills = (text) => {
   const normalized = text.toLowerCase();
   return commonSkills.filter((skill) => normalized.includes(skill.toLowerCase())).slice(0, 10);
 };
+var pdfParser = null;
+var getPdfParser = async () => {
+  if (pdfParser) return pdfParser;
+  const mod = await import("pdf-parse-fork");
+  const parser = mod.default;
+  if (typeof parser !== "function") {
+    throw new Error("PDF parser module failed to load");
+  }
+  pdfParser = parser;
+  return pdfParser;
+};
 router5.post(
   "/analyze",
   authMiddleware,
@@ -945,6 +953,7 @@ router5.post(
           message: "No resume uploaded"
         });
       }
+      const pdf = await getPdfParser();
       const data = await pdf(typedReq.file.buffer);
       const text = (data.text || "").replace(/\s+/g, " ").trim();
       return res.json({

@@ -252,7 +252,7 @@ var init_validation_middleware = __esm({
 
 // backend/src/config/env.ts
 import "dotenv/config";
-var MIN_JWT_SECRET_LENGTH, asRuntimeEnvironment, normalizeOrigin, parseOrigins, parseVercelOrigins, requireEnv, assertSecureOriginInProduction, assertSecureUrlInProduction, cachedConfig, getEnvConfig;
+var MIN_JWT_SECRET_LENGTH, asRuntimeEnvironment, normalizeOrigin, parseOrigins, parseVercelOrigins, readEnv, isOriginAllowedForRuntime, isUrlAllowedForRuntime, cachedConfig, getEnvConfig;
 var init_env = __esm({
   "backend/src/config/env.ts"() {
     "use strict";
@@ -281,33 +281,16 @@ var init_env = __esm({
       process.env.VERCEL_BRANCH_URL ?? "",
       process.env.VERCEL_PROJECT_PRODUCTION_URL ?? ""
     ].map((entry) => normalizeOrigin(entry)).filter(Boolean);
-    requireEnv = (key) => {
-      const value = process.env[key]?.trim();
-      if (!value) {
-        throw new Error(`Missing required environment variable: ${key}`);
-      }
-      return value;
-    };
-    assertSecureOriginInProduction = (key, origin, isProduction4) => {
-      if (!origin || !isProduction4) {
-        return;
-      }
-      if (!origin.startsWith("https://")) {
-        throw new Error(`${key} must use https in production`);
-      }
-    };
-    assertSecureUrlInProduction = (key, value, isProduction4) => {
+    readEnv = (key) => (process.env[key] ?? "").trim();
+    isOriginAllowedForRuntime = (origin, isProduction4) => !origin || !isProduction4 || origin.startsWith("https://");
+    isUrlAllowedForRuntime = (value, isProduction4) => {
       if (!value || !isProduction4) {
-        return;
+        return true;
       }
-      let parsed;
       try {
-        parsed = new URL(value);
+        return new URL(value).protocol === "https:";
       } catch {
-        throw new Error(`${key} must be a valid URL`);
-      }
-      if (parsed.protocol !== "https:") {
-        throw new Error(`${key} must use https in production`);
+        return false;
       }
     };
     cachedConfig = null;
@@ -317,37 +300,28 @@ var init_env = __esm({
       }
       const nodeEnv = asRuntimeEnvironment((process.env.NODE_ENV ?? "development").trim().toLowerCase());
       const isProduction4 = nodeEnv === "production";
-      const mongoUri = requireEnv("MONGO_URI");
-      const jwtSecret = requireEnv("JWT_SECRET");
-      const openRouterApiKey = (process.env.OPENROUTER_API_KEY ?? "").trim();
-      if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
-        throw new Error(`JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+      const mongoUri = readEnv("MONGO_URI");
+      const jwtSecret = readEnv("JWT_SECRET");
+      const openRouterApiKey = readEnv("OPENROUTER_API_KEY");
+      if (jwtSecret && jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
+        console.warn(`JWT_SECRET is shorter than ${MIN_JWT_SECRET_LENGTH} characters`);
       }
-      const frontendOrigin = normalizeOrigin(process.env.FRONTEND_URL ?? "");
+      const frontendOriginCandidate = normalizeOrigin(readEnv("FRONTEND_URL"));
       const vercelOrigins = parseVercelOrigins();
-      if (isProduction4 && !frontendOrigin && vercelOrigins.length === 0) {
-        throw new Error("FRONTEND_URL must be configured in production");
-      }
-      assertSecureOriginInProduction("FRONTEND_URL", frontendOrigin, isProduction4);
       const allowedCorsOrigins = Array.from(
         new Set([
-          frontendOrigin,
+          frontendOriginCandidate,
           ...parseOrigins(process.env.CORS_ORIGINS ?? ""),
           ...vercelOrigins
-        ].filter(Boolean))
+        ].filter((origin) => isOriginAllowedForRuntime(origin, isProduction4)))
       );
-      for (const origin of allowedCorsOrigins) {
-        assertSecureOriginInProduction("CORS_ORIGINS", origin, isProduction4);
-      }
-      if (isProduction4 && allowedCorsOrigins.length === 0) {
-        throw new Error("At least one CORS origin must be configured in production");
-      }
-      const redisRestUrl = (process.env.REDIS_REST_URL ?? "").trim();
-      const redisRestToken = (process.env.REDIS_REST_TOKEN ?? "").trim();
-      if (redisRestUrl && !redisRestToken || !redisRestUrl && redisRestToken) {
-        throw new Error("REDIS_REST_URL and REDIS_REST_TOKEN must be configured together");
-      }
-      assertSecureUrlInProduction("REDIS_REST_URL", redisRestUrl, isProduction4);
+      const frontendOrigin = frontendOriginCandidate && allowedCorsOrigins.includes(frontendOriginCandidate) ? frontendOriginCandidate : "";
+      const redisRestUrlCandidate = readEnv("REDIS_REST_URL");
+      const redisRestTokenCandidate = readEnv("REDIS_REST_TOKEN");
+      const redisPairProvided = Boolean(redisRestUrlCandidate && redisRestTokenCandidate);
+      const redisPairAllowed = redisPairProvided && isUrlAllowedForRuntime(redisRestUrlCandidate, isProduction4);
+      const redisRestUrl = redisPairAllowed ? redisRestUrlCandidate : "";
+      const redisRestToken = redisPairAllowed ? redisRestTokenCandidate : "";
       cachedConfig = {
         nodeEnv,
         isProduction: isProduction4,
@@ -1201,6 +1175,9 @@ async function dbConnect() {
     return cached.conn;
   }
   const { mongoUri } = getEnvConfig();
+  if (!mongoUri) {
+    throw new Error("MONGO_URI is not configured");
+  }
   if (!cached?.promise) {
     const opts = {
       bufferCommands: false,

@@ -16,6 +16,9 @@ async function dbConnect() {
   }
 
   const { mongoUri } = getEnvConfig();
+  if (!mongoUri) {
+    throw new Error("MONGO_URI is not configured");
+  }
 
   if (!cached?.promise) {
     const opts = {

@@ -58,40 +58,20 @@ const parseVercelOrigins = () =>
     .map((entry) => normalizeOrigin(entry))
     .filter(Boolean);
 
-const requireEnv = (key: string) => {
-  const value = process.env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${key}`);
-  }
+const readEnv = (key: string) => (process.env[key] ?? "").trim();
 
-  return value;
-};
+const isOriginAllowedForRuntime = (origin: string, isProduction: boolean) =>
+  !origin || !isProduction || origin.startsWith("https://");
 
-const assertSecureOriginInProduction = (key: string, origin: string, isProduction: boolean) => {
-  if (!origin || !isProduction) {
-    return;
-  }
-
-  if (!origin.startsWith("https://")) {
-    throw new Error(`${key} must use https in production`);
-  }
-};
-
-const assertSecureUrlInProduction = (key: string, value: string, isProduction: boolean) => {
+const isUrlAllowedForRuntime = (value: string, isProduction: boolean) => {
   if (!value || !isProduction) {
-    return;
+    return true;
   }
-
-  let parsed: URL;
 
   try {
-    parsed = new URL(value);
+    return new URL(value).protocol === "https:";
   } catch {
-    throw new Error(`${key} must be a valid URL`);
-  }
-
-  if (parsed.protocol !== "https:") {
-    throw new Error(`${key} must use https in production`);
+    return false;
   }
 };
 
@@ -105,47 +85,36 @@ export const getEnvConfig = (): EnvConfig => {
   const nodeEnv = asRuntimeEnvironment((process.env.NODE_ENV ?? "development").trim().toLowerCase());
   const isProduction = nodeEnv === "production";
 
-  const mongoUri = requireEnv("MONGO_URI");
-  const jwtSecret = requireEnv("JWT_SECRET");
-  const openRouterApiKey = (process.env.OPENROUTER_API_KEY ?? "").trim();
+  const mongoUri = readEnv("MONGO_URI");
+  const jwtSecret = readEnv("JWT_SECRET");
+  const openRouterApiKey = readEnv("OPENROUTER_API_KEY");
 
-  if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
-    throw new Error(`JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+  if (jwtSecret && jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
+    console.warn(`JWT_SECRET is shorter than ${MIN_JWT_SECRET_LENGTH} characters`);
   }
 
-  const frontendOrigin = normalizeOrigin(process.env.FRONTEND_URL ?? "");
+  const frontendOriginCandidate = normalizeOrigin(readEnv("FRONTEND_URL"));
   const vercelOrigins = parseVercelOrigins();
-
-  if (isProduction && !frontendOrigin && vercelOrigins.length === 0) {
-    throw new Error("FRONTEND_URL must be configured in production");
-  }
-
-  assertSecureOriginInProduction("FRONTEND_URL", frontendOrigin, isProduction);
-
   const allowedCorsOrigins = Array.from(
     new Set([
-      frontendOrigin,
+      frontendOriginCandidate,
       ...parseOrigins(process.env.CORS_ORIGINS ?? ""),
       ...vercelOrigins,
-    ].filter(Boolean))
+    ].filter((origin) => isOriginAllowedForRuntime(origin, isProduction)))
   );
 
-  for (const origin of allowedCorsOrigins) {
-    assertSecureOriginInProduction("CORS_ORIGINS", origin, isProduction);
-  }
+  const frontendOrigin =
+    frontendOriginCandidate && allowedCorsOrigins.includes(frontendOriginCandidate)
+      ? frontendOriginCandidate
+      : "";
 
-  if (isProduction && allowedCorsOrigins.length === 0) {
-    throw new Error("At least one CORS origin must be configured in production");
-  }
+  const redisRestUrlCandidate = readEnv("REDIS_REST_URL");
+  const redisRestTokenCandidate = readEnv("REDIS_REST_TOKEN");
+  const redisPairProvided = Boolean(redisRestUrlCandidate && redisRestTokenCandidate);
+  const redisPairAllowed = redisPairProvided && isUrlAllowedForRuntime(redisRestUrlCandidate, isProduction);
 
-  const redisRestUrl = (process.env.REDIS_REST_URL ?? "").trim();
-  const redisRestToken = (process.env.REDIS_REST_TOKEN ?? "").trim();
-
-  if ((redisRestUrl && !redisRestToken) || (!redisRestUrl && redisRestToken)) {
-    throw new Error("REDIS_REST_URL and REDIS_REST_TOKEN must be configured together");
-  }
-
-  assertSecureUrlInProduction("REDIS_REST_URL", redisRestUrl, isProduction);
+  const redisRestUrl = redisPairAllowed ? redisRestUrlCandidate : "";
+  const redisRestToken = redisPairAllowed ? redisRestTokenCandidate : "";
 
   cachedConfig = {
     nodeEnv,

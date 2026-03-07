@@ -1123,6 +1123,44 @@ var frontendCandidates = [
   path.join(__dirname, "../../frontend/dist")
 ];
 var frontendPath = frontendCandidates.find((candidate) => fs.existsSync(candidate));
+var normalizeHost = (value) => value.split(",")[0]?.trim().toLowerCase() ?? "";
+var getOriginHost = (origin) => {
+  try {
+    return new URL(origin).host.toLowerCase();
+  } catch {
+    return "";
+  }
+};
+var isOriginAllowed = (origin, req) => {
+  if (allowedOrigins.has(origin)) {
+    return true;
+  }
+  const originHost = getOriginHost(origin);
+  if (!originHost) {
+    return false;
+  }
+  const requestHost = normalizeHost(req.header("x-forwarded-host") ?? req.header("host") ?? "");
+  return Boolean(requestHost) && originHost === requestHost;
+};
+var baseCorsOptions = {
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+  credentials: true
+};
+var corsDelegate = (req, callback) => {
+  const requestOrigin = req.header("origin");
+  if (!requestOrigin || isOriginAllowed(requestOrigin, req)) {
+    callback(null, {
+      ...baseCorsOptions,
+      origin: requestOrigin ?? true
+    });
+    return;
+  }
+  callback(new Error("Not allowed by CORS"), {
+    ...baseCorsOptions,
+    origin: false
+  });
+};
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use((req, res, next) => {
@@ -1138,20 +1176,7 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error("Not allowed by CORS"));
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
-    credentials: true
-  })
-);
+app.use(cors(corsDelegate));
 app.use(cookieParser());
 app.use(express2.json({ limit: "1mb" }));
 app.use(express2.urlencoded({ extended: true, limit: "1mb" }));

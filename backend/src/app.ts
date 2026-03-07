@@ -1,7 +1,7 @@
 ﻿import fs from "fs";
 import path from "path";
 import express from "express";
-import cors from "cors";
+import cors, { type CorsOptions, type CorsOptionsDelegate } from "cors";
 import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
 import { fileURLToPath } from "url";
@@ -29,6 +29,54 @@ const frontendCandidates = [
 ];
 const frontendPath = frontendCandidates.find((candidate) => fs.existsSync(candidate));
 
+const normalizeHost = (value: string) => value.split(",")[0]?.trim().toLowerCase() ?? "";
+
+const getOriginHost = (origin: string) => {
+  try {
+    return new URL(origin).host.toLowerCase();
+  } catch {
+    return "";
+  }
+};
+
+const isOriginAllowed = (origin: string, req: express.Request) => {
+  if (allowedOrigins.has(origin)) {
+    return true;
+  }
+
+  const originHost = getOriginHost(origin);
+  if (!originHost) {
+    return false;
+  }
+
+  // Support same-host API calls regardless of deployment hostname (e.g. Vercel custom/preview URLs).
+  const requestHost = normalizeHost(req.header("x-forwarded-host") ?? req.header("host") ?? "");
+  return Boolean(requestHost) && originHost === requestHost;
+};
+
+const baseCorsOptions: CorsOptions = {
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
+  credentials: true,
+};
+
+const corsDelegate: CorsOptionsDelegate<express.Request> = (req, callback) => {
+  const requestOrigin = req.header("origin");
+
+  if (!requestOrigin || isOriginAllowed(requestOrigin, req)) {
+    callback(null, {
+      ...baseCorsOptions,
+      origin: requestOrigin ?? true,
+    });
+    return;
+  }
+
+  callback(new Error("Not allowed by CORS"), {
+    ...baseCorsOptions,
+    origin: false,
+  });
+};
+
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
 
@@ -48,21 +96,7 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) {
-        callback(null, true);
-        return;
-      }
-
-      callback(new Error("Not allowed by CORS"));
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token"],
-    credentials: true,
-  })
-);
+app.use(cors(corsDelegate));
 
 app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));

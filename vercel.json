@@ -1,4 +1,4 @@
-﻿{
+{
   "version": 2,
   "framework": null,
   "installCommand": "npm install && npm --prefix frontend install",

@@ -49,6 +49,15 @@ const parseOrigins = (value: string) =>
     .map((entry) => normalizeOrigin(entry))
     .filter(Boolean);
 
+const parseVercelOrigins = () =>
+  [
+    process.env.VERCEL_URL ?? "",
+    process.env.VERCEL_BRANCH_URL ?? "",
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ?? "",
+  ]
+    .map((entry) => normalizeOrigin(entry))
+    .filter(Boolean);
+
 const requireEnv = (key: string) => {
   const value = process.env[key]?.trim();
   if (!value) {
@@ -105,13 +114,20 @@ export const getEnvConfig = (): EnvConfig => {
   }
 
   const frontendOrigin = normalizeOrigin(process.env.FRONTEND_URL ?? "");
-  if (isProduction && !frontendOrigin) {
+  const vercelOrigins = parseVercelOrigins();
+
+  if (isProduction && !frontendOrigin && vercelOrigins.length === 0) {
     throw new Error("FRONTEND_URL must be configured in production");
   }
+
   assertSecureOriginInProduction("FRONTEND_URL", frontendOrigin, isProduction);
 
   const allowedCorsOrigins = Array.from(
-    new Set([frontendOrigin, ...parseOrigins(process.env.CORS_ORIGINS ?? "")].filter(Boolean))
+    new Set([
+      frontendOrigin,
+      ...parseOrigins(process.env.CORS_ORIGINS ?? ""),
+      ...vercelOrigins,
+    ].filter(Boolean))
   );
 
   for (const origin of allowedCorsOrigins) {

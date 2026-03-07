@@ -245,6 +245,11 @@ var normalizeOrigin = (origin) => {
   }
 };
 var parseOrigins = (value) => value.split(",").map((entry) => normalizeOrigin(entry)).filter(Boolean);
+var parseVercelOrigins = () => [
+  process.env.VERCEL_URL ?? "",
+  process.env.VERCEL_BRANCH_URL ?? "",
+  process.env.VERCEL_PROJECT_PRODUCTION_URL ?? ""
+].map((entry) => normalizeOrigin(entry)).filter(Boolean);
 var requireEnv = (key) => {
   const value = process.env[key]?.trim();
   if (!value) {
@@ -288,12 +293,17 @@ var getEnvConfig = () => {
     throw new Error(`JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
   }
   const frontendOrigin = normalizeOrigin(process.env.FRONTEND_URL ?? "");
-  if (isProduction4 && !frontendOrigin) {
+  const vercelOrigins = parseVercelOrigins();
+  if (isProduction4 && !frontendOrigin && vercelOrigins.length === 0) {
     throw new Error("FRONTEND_URL must be configured in production");
   }
   assertSecureOriginInProduction("FRONTEND_URL", frontendOrigin, isProduction4);
   const allowedCorsOrigins = Array.from(
-    new Set([frontendOrigin, ...parseOrigins(process.env.CORS_ORIGINS ?? "")].filter(Boolean))
+    new Set([
+      frontendOrigin,
+      ...parseOrigins(process.env.CORS_ORIGINS ?? ""),
+      ...vercelOrigins
+    ].filter(Boolean))
   );
   for (const origin of allowedCorsOrigins) {
     assertSecureOriginInProduction("CORS_ORIGINS", origin, isProduction4);

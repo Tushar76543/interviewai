@@ -107,7 +107,7 @@ export const getEnvConfig = (): EnvConfig => {
 
   const mongoUri = requireEnv("MONGO_URI");
   const jwtSecret = requireEnv("JWT_SECRET");
-  const openRouterApiKey = requireEnv("OPENROUTER_API_KEY");
+  const openRouterApiKey = (process.env.OPENROUTER_API_KEY ?? "").trim();
 
   if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
     throw new Error(`JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);

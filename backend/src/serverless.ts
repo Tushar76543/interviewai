@@ -1,7 +1,16 @@
-import app from "./app.js";
+type AppHandler = (req: any, res: any) => unknown;
 
-// Vercel rewrites /api/:path* to /api/index.js; preserve the original path for Express.
-export default function handler(req: any, res: any) {
+let appPromise: Promise<AppHandler> | null = null;
+
+const loadApp = async () => {
+  if (!appPromise) {
+    appPromise = import("./app.js").then((module) => module.default as AppHandler);
+  }
+
+  return appPromise;
+};
+
+const rewriteRequestUrl = (req: any) => {
   const url = new URL(req.url || "/", "http://localhost");
   const forwardedPath = url.searchParams.get("path");
 
@@ -14,6 +23,26 @@ export default function handler(req: any, res: any) {
     const query = url.searchParams.toString();
     req.url = `/api${query ? `?${query}` : ""}`;
   }
+};
 
-  return app(req, res);
+// Vercel rewrites /api/:path* to /api/index.js; preserve the original path for Express.
+export default async function handler(req: any, res: any) {
+  try {
+    rewriteRequestUrl(req);
+    const app = await loadApp();
+    return app(req, res);
+  } catch (error) {
+    console.error("Server bootstrap failed", error);
+
+    if (res.headersSent) {
+      return;
+    }
+
+    const detail = error instanceof Error ? error.message : "Unknown startup failure";
+    res.status(500).json({
+      success: false,
+      message: "Server configuration error",
+      detail: process.env.NODE_ENV === "production" ? undefined : detail,
+    });
+  }
 }

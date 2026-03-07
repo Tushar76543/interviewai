@@ -1,5 +1,4 @@
 // backend/src/app.ts
-import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import express2 from "express";
@@ -224,6 +223,105 @@ function handleValidationErrors(req, res, next) {
   next();
 }
 
+// backend/src/config/env.ts
+import "dotenv/config";
+var MIN_JWT_SECRET_LENGTH = 32;
+var asRuntimeEnvironment = (value) => {
+  if (value === "production" || value === "test") {
+    return value;
+  }
+  return "development";
+};
+var normalizeOrigin = (origin) => {
+  const trimmed = origin.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const url = trimmed.startsWith("http://") || trimmed.startsWith("https://") ? new URL(trimmed) : new URL(`https://${trimmed}`);
+    return url.origin;
+  } catch {
+    return "";
+  }
+};
+var parseOrigins = (value) => value.split(",").map((entry) => normalizeOrigin(entry)).filter(Boolean);
+var requireEnv = (key) => {
+  const value = process.env[key]?.trim();
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${key}`);
+  }
+  return value;
+};
+var assertSecureOriginInProduction = (key, origin, isProduction4) => {
+  if (!origin || !isProduction4) {
+    return;
+  }
+  if (!origin.startsWith("https://")) {
+    throw new Error(`${key} must use https in production`);
+  }
+};
+var assertSecureUrlInProduction = (key, value, isProduction4) => {
+  if (!value || !isProduction4) {
+    return;
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error(`${key} must be a valid URL`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`${key} must use https in production`);
+  }
+};
+var cachedConfig = null;
+var getEnvConfig = () => {
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+  const nodeEnv = asRuntimeEnvironment((process.env.NODE_ENV ?? "development").trim().toLowerCase());
+  const isProduction4 = nodeEnv === "production";
+  const mongoUri = requireEnv("MONGO_URI");
+  const jwtSecret = requireEnv("JWT_SECRET");
+  const openRouterApiKey = requireEnv("OPENROUTER_API_KEY");
+  if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
+    throw new Error(`JWT_SECRET must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
+  }
+  const frontendOrigin = normalizeOrigin(process.env.FRONTEND_URL ?? "");
+  if (isProduction4 && !frontendOrigin) {
+    throw new Error("FRONTEND_URL must be configured in production");
+  }
+  assertSecureOriginInProduction("FRONTEND_URL", frontendOrigin, isProduction4);
+  const allowedCorsOrigins = Array.from(
+    new Set([frontendOrigin, ...parseOrigins(process.env.CORS_ORIGINS ?? "")].filter(Boolean))
+  );
+  for (const origin of allowedCorsOrigins) {
+    assertSecureOriginInProduction("CORS_ORIGINS", origin, isProduction4);
+  }
+  if (isProduction4 && allowedCorsOrigins.length === 0) {
+    throw new Error("At least one CORS origin must be configured in production");
+  }
+  const redisRestUrl = (process.env.REDIS_REST_URL ?? "").trim();
+  const redisRestToken = (process.env.REDIS_REST_TOKEN ?? "").trim();
+  if (redisRestUrl && !redisRestToken || !redisRestUrl && redisRestToken) {
+    throw new Error("REDIS_REST_URL and REDIS_REST_TOKEN must be configured together");
+  }
+  assertSecureUrlInProduction("REDIS_REST_URL", redisRestUrl, isProduction4);
+  cachedConfig = {
+    nodeEnv,
+    isProduction: isProduction4,
+    mongoUri,
+    jwtSecret,
+    openRouterApiKey,
+    frontendOrigin,
+    allowedCorsOrigins,
+    redisRestUrl,
+    redisRestToken,
+    redisConfigured: Boolean(redisRestUrl && redisRestToken)
+  };
+  return cachedConfig;
+};
+
 // backend/src/lib/rateLimitStore.ts
 var asNumber = (value) => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -318,10 +416,9 @@ var getRateLimitStore = () => {
   if (singletonStore) {
     return singletonStore;
   }
-  const redisUrl = process.env.REDIS_REST_URL;
-  const redisToken = process.env.REDIS_REST_TOKEN;
-  if (redisUrl && redisToken) {
-    singletonStore = new UpstashRedisRateLimitStore(redisUrl, redisToken);
+  const { redisRestUrl, redisRestToken } = getEnvConfig();
+  if (redisRestUrl && redisRestToken) {
+    singletonStore = new UpstashRedisRateLimitStore(redisRestUrl, redisRestToken);
     return singletonStore;
   }
   singletonStore = new InMemoryRateLimitStore();
@@ -973,56 +1070,42 @@ var resume_routes_default = router5;
 import mongoose4 from "mongoose";
 var cached = global.mongoose;
 if (!cached) {
-  cached = global.mongoose = { conn: null, promise: null };
+  cached = global.mongoose = {
+    conn: null,
+    promise: null
+  };
 }
 async function dbConnect() {
-  if (cached.conn) {
+  if (cached?.conn) {
     return cached.conn;
   }
-  const uri = process.env.MONGO_URI;
-  if (!uri) {
-    throw new Error("MONGO_URI environment variable is not defined");
-  }
-  if (!cached.promise) {
+  const { mongoUri } = getEnvConfig();
+  if (!cached?.promise) {
     const opts = {
       bufferCommands: false,
       serverSelectionTimeoutMS: 5e3,
       socketTimeoutMS: 1e4
     };
-    cached.promise = mongoose4.connect(uri, opts).then((mongoose6) => {
-      return mongoose6;
+    cached.promise = mongoose4.connect(mongoUri, opts).then((mongooseInstance) => {
+      return mongooseInstance;
     });
   }
   try {
     cached.conn = await cached.promise;
-  } catch (e) {
+  } catch (error) {
     cached.promise = null;
-    throw e;
+    throw error;
   }
   return cached.conn;
 }
 var db_default = dbConnect;
 
 // backend/src/app.ts
-dotenv.config();
+var env = getEnvConfig();
 var app = express2();
-var isProduction3 = process.env.NODE_ENV === "production";
-var normalizeOrigin = (origin) => {
-  const trimmed = origin.trim();
-  if (!trimmed) return "";
-  try {
-    const url = trimmed.startsWith("http://") || trimmed.startsWith("https://") ? new URL(trimmed) : new URL(`https://${trimmed}`);
-    return url.origin;
-  } catch {
-    return "";
-  }
-};
-var configuredOrigins = [
-  process.env.FRONTEND_URL ?? "",
-  ...(process.env.CORS_ORIGINS ?? "").split(",")
-].map(normalizeOrigin).filter(Boolean);
+var isProduction3 = env.isProduction;
 var defaultDevOrigins = isProduction3 ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"];
-var allowedOrigins = /* @__PURE__ */ new Set([...defaultDevOrigins, ...configuredOrigins]);
+var allowedOrigins = /* @__PURE__ */ new Set([...defaultDevOrigins, ...env.allowedCorsOrigins]);
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path.dirname(__filename);
 var frontendCandidates = [
@@ -1063,16 +1146,35 @@ app.use(cookieParser());
 app.use(express2.json({ limit: "1mb" }));
 app.use(express2.urlencoded({ extended: true, limit: "1mb" }));
 app.use("/api", csrfCookieMiddleware);
+var buildHealthPayload = () => ({
+  uptime: Math.round(process.uptime()),
+  timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+  dbState: mongoose5.connection.readyState
+});
 var healthHandler = (_req, res) => {
   res.status(200).json({
     status: "ok",
-    uptime: Math.round(process.uptime()),
-    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-    dbState: mongoose5.connection.readyState
+    ...buildHealthPayload()
   });
+};
+var readinessHandler = async (_req, res) => {
+  try {
+    await db_default();
+    res.status(200).json({
+      status: "ready",
+      ...buildHealthPayload()
+    });
+  } catch {
+    res.status(503).json({
+      status: "degraded",
+      ...buildHealthPayload()
+    });
+  }
 };
 app.get("/api/health", healthHandler);
 app.get("/health", healthHandler);
+app.get("/api/ready", readinessHandler);
+app.get("/ready", readinessHandler);
 app.use("/api", requireCsrfProtection);
 var requireDb = async (_req, _res, next) => {
   try {
@@ -1129,7 +1231,20 @@ app.use(
 var app_default = app;
 
 // backend/src/serverless.ts
-var serverless_default = app_default;
+function handler(req, res) {
+  const url = new URL(req.url || "/", "http://localhost");
+  const forwardedPath = url.searchParams.get("path");
+  if (forwardedPath !== null) {
+    url.searchParams.delete("path");
+    const normalizedPath = forwardedPath.startsWith("/") ? forwardedPath : `/${forwardedPath}`;
+    const query = url.searchParams.toString();
+    req.url = `/api${normalizedPath}${query ? `?${query}` : ""}`;
+  } else if (url.pathname.startsWith("/api/index.js")) {
+    const query = url.searchParams.toString();
+    req.url = `/api${query ? `?${query}` : ""}`;
+  }
+  return app_default(req, res);
+}
 export {
-  serverless_default as default
+  handler as default
 };

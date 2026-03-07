@@ -7,6 +7,7 @@ import NavHeader from "../components/NavHeader";
 import "../App.css";
 import Editor from "@monaco-editor/react";
 import Webcam from "react-webcam";
+import { extractApiErrorMessage } from "../utils/http";
 
 
 interface Question {
@@ -39,7 +40,7 @@ function Interview() {
 
   const isTechnicalRole = ["Software Engineer", "Web Developer", "AI Engineer", "Data Scientist"].includes(role);
 
-  // 🎙️ Voice recognition setup
+  // Voice recognition setup
   const {
     transcript,
     listening,
@@ -47,7 +48,7 @@ function Interview() {
     browserSupportsSpeechRecognition,
   } = useSpeechRecognition();
 
-  // ⏱️ Timer Countdown
+  // Timer countdown
   useEffect(() => {
     if (timeLeft === null || timeLeft <= 0) return;
 
@@ -62,7 +63,7 @@ function Interview() {
     if (transcript) setAnswer(transcript); // auto-fill answer with speech text
   }, [transcript]);
 
-  // 🗣️ Speak text aloud (question/feedback)
+  // Speak text aloud (question/feedback)
   const speak = (text: string) => {
     window.speechSynthesis.cancel(); // Stop any previous speech
     const utterance = new SpeechSynthesisUtterance(text);
@@ -94,7 +95,7 @@ function Interview() {
     setIsSpeaking(false);
   }
 
-  // 🔊 Helper to ensure speak is called correctly, now handles toggle
+  // Helper to ensure speak is called correctly, now handles toggle
   const speakNow = (text: string) => {
     if (isSpeaking) {
       stopSpeech();
@@ -103,7 +104,7 @@ function Interview() {
     }
   };
 
-  // ✅ Start interview
+  // Start interview
   const startInterview = async () => {
     setLoading(true);
     setError("");
@@ -119,16 +120,16 @@ function Interview() {
       if (autoSpeak) {
         speak(res.data.question.prompt);
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      console.error(err);
-      setError(err.response?.data?.error || "❌ Could not start interview. Please check backend.");
+    } catch (error: unknown) {
+      setError(
+        extractApiErrorMessage(error, "Could not start interview. Please check backend.")
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ Get next question (avoid repeats)
+  // Get next question (avoid repeats)
   const nextQuestion = async () => {
     setLoading(true);
     setError("");
@@ -148,16 +149,16 @@ function Interview() {
       if (autoSpeak) {
         speak(res.data.question.prompt);
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      console.error(err);
-      setError(err.response?.data?.error || "❌ Could not generate next question. Please check backend.");
+    } catch (error: unknown) {
+      setError(
+        extractApiErrorMessage(error, "Could not generate next question. Please check backend.")
+      );
     } finally {
       setLoading(false);
     }
   };
 
-  // ✅ Submit answer → get feedback + follow-up
+  // Submit answer -> get feedback + follow-up
   const submitAnswer = async () => {
     if (!question) return;
     if (!answer.trim()) {
@@ -188,10 +189,10 @@ function Interview() {
         setHistory((prev) => [...prev, res.data.followUp]);
         setTimeLeft(res.data.followUp?.timeLimitSec || null);
       }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) {
-      console.error(err);
-      setError("❌ Could not get feedback. Please check backend.");
+    } catch (error: unknown) {
+      setError(
+        extractApiErrorMessage(error, "Could not get feedback. Please check backend.")
+      );
     } finally {
       setLoading(false);
     }
@@ -220,7 +221,7 @@ function Interview() {
     <div className="interview-container">
       <NavHeader />
       <div className="interview-header">
-        <h1>🧠 AI Interview Coach</h1>
+        <h1>AI Interview Coach</h1>
         <p style={{ color: "var(--slate-500)", marginTop: "var(--space-sm)" }}>
           Practice interviews and get instant AI-powered feedback
         </p>
@@ -265,12 +266,12 @@ function Interview() {
         <div className="question-card">
           <div className="question-card-header">
             <h3 style={{ color: "var(--primary-700)", marginBottom: "var(--spacing-md)" }}>
-              📝 Question
+              Question
             </h3>
             <div className="question-utils">
               {timeLeft !== null && timeLeft > 0 && (
                 <span className={`timer ${timeLeft <= 30 ? "timer-warning" : ""}`}>
-                  ⏱️ {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")}
+                  Time {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")}
                 </span>
               )}
               <label className="toggle-speak">
@@ -279,7 +280,7 @@ function Interview() {
                   checked={autoSpeak}
                   onChange={(e) => setAutoSpeak(e.target.checked)}
                 />
-                🔊 Auto-speak
+                Auto-speak
               </label>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 {!isSpeaking ? (
@@ -289,7 +290,7 @@ function Interview() {
                     className="btn-glass btn-sm"
                     style={{ minWidth: "100px" }}
                   >
-                    🔊 Play
+                    Play
                   </button>
                 ) : (
                   <>
@@ -298,7 +299,7 @@ function Interview() {
                       onClick={pauseSpeech}
                       className="btn-glass btn-sm"
                     >
-                      ⏸️ Pause
+                      Pause
                     </button>
                     <button
                       type="button"
@@ -306,11 +307,11 @@ function Interview() {
                       className="btn-glass btn-sm"
                       style={{ color: "var(--danger-600)", borderColor: "var(--danger-600)" }}
                     >
-                      ⏹️ Stop
+                      Stop
                     </button>
                   </>
                 )}
-                <button type="button" onClick={resumeSpeech} className="btn-glass btn-sm">▶️ Resume</button>
+                <button type="button" onClick={resumeSpeech} className="btn-glass btn-sm">Resume</button>
               </div>
             </div>
           </div>
@@ -323,14 +324,14 @@ function Interview() {
                 onClick={startListening}
                 className="btn-secondary mic-button"
               >
-                🎤 Start Speaking
+                Start Speaking
               </button>
             ) : (
               <button
                 onClick={stopListening}
                 className="mic-button listening"
               >
-                🛑 Stop Recording
+                Stop Recording
               </button>
             )}
             {listening && (
@@ -351,7 +352,7 @@ function Interview() {
                 className={`btn-sm ${showCamera ? "btn-secondary" : "btn-glass"}`}
                 style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
               >
-                {showCamera ? "❌ Hide Camera" : "📹 Show Camera"}
+                {showCamera ? "Hide Camera" : "Show Camera"}
               </button>
             </div>
 
@@ -398,11 +399,11 @@ function Interview() {
       {/* Feedback Card */}
       {feedback && (
         <div className="feedback-card">
-          <h3 className="feedback-title">🧾 Feedback Summary</h3>
+          <h3 className="feedback-title">Feedback Summary</h3>
 
           <div className="score-grid">
             <div className="score-item">
-              <div className="score-label">🎯 Technical</div>
+              <div className="score-label">Technical</div>
               <div className="score-value">{feedback.technical}/10</div>
               <div className="score-bar">
                 <div
@@ -413,7 +414,7 @@ function Interview() {
             </div>
 
             <div className="score-item">
-              <div className="score-label">🗣️ Clarity</div>
+              <div className="score-label">Clarity</div>
               <div className="score-value">{feedback.clarity}/10</div>
               <div className="score-bar">
                 <div
@@ -424,7 +425,7 @@ function Interview() {
             </div>
 
             <div className="score-item">
-              <div className="score-label">💡 Completeness</div>
+              <div className="score-label">Completeness</div>
               <div className="score-value">{feedback.completeness}/10</div>
               <div className="score-bar">
                 <div
@@ -436,7 +437,7 @@ function Interview() {
           </div>
 
           <div className="suggestion-box">
-            <strong style={{ color: "var(--primary-600)" }}>💬 Suggestion:</strong>
+            <strong style={{ color: "var(--primary-600)" }}>Suggestion:</strong>
             <p style={{ marginTop: "var(--space-sm)", color: "var(--slate-700)" }}>
               {feedback.suggestion}
             </p>
@@ -452,7 +453,7 @@ function Interview() {
             disabled={loading}
             className="btn-success"
           >
-            {loading ? "Loading next..." : "Next Question ➡️"}
+            {loading ? "Loading next..." : "Next Question"}
           </button>
         </div>
       )}

@@ -1,7 +1,12 @@
 ﻿import axios, { type InternalAxiosRequestConfig } from "axios";
 
 const normalizedApiUrl = (import.meta.env.VITE_API_URL ?? "").trim().replace(/\/+$/, "");
-const apiBaseUrl = normalizedApiUrl ? `${normalizedApiUrl}/api` : "/api";
+export const apiBaseUrl =
+  !normalizedApiUrl
+    ? "/api"
+    : normalizedApiUrl === "/api" || normalizedApiUrl.endsWith("/api")
+      ? normalizedApiUrl
+      : `${normalizedApiUrl}/api`;
 const CSRF_COOKIE_NAME = "csrf_token";
 
 let csrfBootstrapPromise: Promise<void> | null = null;

@@ -1,7 +1,4 @@
-﻿import { ensureCsrfToken, getCsrfToken } from "../services/api";
-
-const API_BASE =
-  import.meta.env.VITE_API_URL || (typeof window !== "undefined" ? "" : "");
+import { apiBaseUrl, ensureCsrfToken, getCsrfToken } from "../services/api";
 
 const parseApiResponse = async (res: Response) => {
   const raw = await res.text();
@@ -23,7 +20,7 @@ const getCsrfHeaders = () => {
 export async function login(email: string, password: string) {
   await ensureCsrfToken();
 
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
+  const res = await fetch(`${apiBaseUrl}/auth/login`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -38,7 +35,7 @@ export async function login(email: string, password: string) {
 export async function signup(name: string, email: string, password: string) {
   await ensureCsrfToken();
 
-  const res = await fetch(`${API_BASE}/api/auth/signup`, {
+  const res = await fetch(`${apiBaseUrl}/auth/signup`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -53,7 +50,7 @@ export async function signup(name: string, email: string, password: string) {
 export async function logout() {
   await ensureCsrfToken();
 
-  const res = await fetch(`${API_BASE}/api/auth/logout`, {
+  const res = await fetch(`${apiBaseUrl}/auth/logout`, {
     method: "POST",
     credentials: "include",
     headers: getCsrfHeaders(),
@@ -62,7 +59,7 @@ export async function logout() {
 }
 
 export async function getMe() {
-  const res = await fetch(`${API_BASE}/api/auth/me`, {
+  const res = await fetch(`${apiBaseUrl}/auth/me`, {
     method: "GET",
     credentials: "include",
   });
@@ -70,7 +67,7 @@ export async function getMe() {
 }
 
 export async function getCsrf() {
-  const res = await fetch(`${API_BASE}/api/auth/csrf`, {
+  const res = await fetch(`${apiBaseUrl}/auth/csrf`, {
     method: "GET",
     credentials: "include",
   });

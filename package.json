@@ -2,10 +2,18 @@
     "name": "interviewai",
     "type": "module",
     "private": true,
+    "engines": {
+        "node": "20.x"
+    },
     "scripts": {
         "dev": "concurrently \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
         "start": "npm --prefix backend start",
-        "bundle:api": "npx esbuild backend/src/serverless.ts --bundle --platform=node --packages=external --outfile=api/index.js --format=esm"
+        "lint": "npm --prefix frontend run lint",
+        "build:backend": "npm --prefix backend run build",
+        "build:frontend": "npm --prefix frontend run build",
+        "build": "npm run build:backend && npm run build:frontend && npm run bundle:api",
+        "bundle:api": "npx esbuild backend/src/serverless.ts --bundle --platform=node --packages=external --outfile=api/index.js --format=esm",
+        "check:prod": "npm run build:backend && npm run lint && npm run build:frontend && npm run bundle:api"
     },
     "devDependencies": {
         "concurrently": "^8.2.2",

@@ -1,18 +1,25 @@
-{
-    "version": 2,
-    "buildCommand": "npm run bundle:api && cd frontend && npm run build",
-    "outputDirectory": "frontend/dist",
-    "installCommand": "npm install && cd backend && npm install && cd ../frontend && npm install",
-    "framework": null,
-    "rewrites": [
-        {
-            "source": "/api/:path*",
-            "destination": "/api/index.js"
-        }
-    ],
-    "functions": {
-        "api/index.js": {
-            "maxDuration": 30
-        }
+﻿{
+  "version": 2,
+  "framework": null,
+  "installCommand": "npm install && npm --prefix frontend install",
+  "buildCommand": "npm run bundle:api && npm --prefix frontend run build",
+  "outputDirectory": "frontend/dist",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 30
     }
+  },
+  "routes": [
+    {
+      "src": "/api/(.*)",
+      "dest": "/api/index.js?path=$1"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html"
+    }
+  ]
 }

@@ -1,4 +1,6 @@
-﻿export type RateLimitConsumeParams = {
+﻿import { getEnvConfig } from "../config/env.js";
+
+export type RateLimitConsumeParams = {
   bucket: string;
   key: string;
   windowMs: number;
@@ -140,11 +142,10 @@ export const getRateLimitStore = (): RateLimitStore => {
     return singletonStore;
   }
 
-  const redisUrl = process.env.REDIS_REST_URL;
-  const redisToken = process.env.REDIS_REST_TOKEN;
+  const { redisRestUrl, redisRestToken } = getEnvConfig();
 
-  if (redisUrl && redisToken) {
-    singletonStore = new UpstashRedisRateLimitStore(redisUrl, redisToken);
+  if (redisRestUrl && redisRestToken) {
+    singletonStore = new UpstashRedisRateLimitStore(redisRestUrl, redisRestToken);
     return singletonStore;
   }
 

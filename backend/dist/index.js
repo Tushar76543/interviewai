@@ -1,15 +1,7 @@
 import mongoose from "mongoose";
 import app from "./app.js";
-const isProduction = process.env.NODE_ENV === "production";
-const requiredEnv = ["MONGO_URI", "JWT_SECRET", "OPENROUTER_API_KEY"];
-if (isProduction) {
-    requiredEnv.push("FRONTEND_URL", "REDIS_REST_URL", "REDIS_REST_TOKEN");
-}
-const missingEnv = requiredEnv.filter((key) => !process.env[key]);
-if (missingEnv.length > 0) {
-    console.error(`Missing required environment variables: ${missingEnv.join(", ")}`);
-    process.exit(1);
-}
+import { getEnvConfig } from "./config/env.js";
+const { isProduction } = getEnvConfig();
 const PORT = Number.parseInt(process.env.PORT ?? "5000", 10);
 const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
@@ -37,5 +29,7 @@ process.on("unhandledRejection", (reason) => {
 });
 process.on("uncaughtException", (error) => {
     console.error("Uncaught exception:", error);
-    shutdown("UNCAUGHT_EXCEPTION");
+    if (isProduction) {
+        shutdown("UNCAUGHT_EXCEPTION");
+    }
 });

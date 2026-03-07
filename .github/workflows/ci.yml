@@ -1,0 +1,45 @@
+name: InterviewAI CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - name: Install Root Dependencies
+        run: npm ci
+
+      - name: Install Backend Dependencies
+        run: npm ci --prefix backend
+
+      - name: Install Frontend Dependencies
+        run: npm ci --prefix frontend
+
+      - name: Backend Build
+        run: npm run build:backend
+
+      - name: Frontend Lint
+        run: npm run lint
+
+      - name: Frontend Build
+        run: npm run build:frontend
+
+      - name: Bundle Vercel API
+        run: npm run bundle:api

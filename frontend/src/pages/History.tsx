@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import api from "../services/api";
 import NavHeader from "../components/NavHeader";
 import "../App.css";
+import { extractApiErrorMessage } from "../utils/http";
 
 interface QAEntry {
   question: string;
@@ -34,8 +35,8 @@ export default function History() {
     api
       .get("/history")
       .then((res) => setSessions(res.data.sessions || []))
-      .catch((err) => {
-        setError(err.response?.data?.error || "Failed to load history.");
+      .catch((error: unknown) => {
+        setError(extractApiErrorMessage(error, "Failed to load history."));
       })
       .finally(() => setLoading(false));
   }, []);

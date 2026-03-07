@@ -1,4 +1,3 @@
-import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import express from "express";
@@ -13,31 +12,12 @@ import historyRoutes from "./routes/history.routes.js";
 import resumeRoutes from "./routes/resume.routes.js";
 import dbConnect from "./lib/db.js";
 import { csrfCookieMiddleware, requireCsrfProtection } from "./middleware/csrf.middleware.js";
-dotenv.config();
+import { getEnvConfig } from "./config/env.js";
+const env = getEnvConfig();
 const app = express();
-const isProduction = process.env.NODE_ENV === "production";
-const normalizeOrigin = (origin) => {
-    const trimmed = origin.trim();
-    if (!trimmed)
-        return "";
-    try {
-        const url = trimmed.startsWith("http://") || trimmed.startsWith("https://")
-            ? new URL(trimmed)
-            : new URL(`https://${trimmed}`);
-        return url.origin;
-    }
-    catch {
-        return "";
-    }
-};
-const configuredOrigins = [
-    process.env.FRONTEND_URL ?? "",
-    ...(process.env.CORS_ORIGINS ?? "").split(","),
-]
-    .map(normalizeOrigin)
-    .filter(Boolean);
+const isProduction = env.isProduction;
 const defaultDevOrigins = isProduction ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"];
-const allowedOrigins = new Set([...defaultDevOrigins, ...configuredOrigins]);
+const allowedOrigins = new Set([...defaultDevOrigins, ...env.allowedCorsOrigins]);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const frontendCandidates = [
@@ -73,16 +53,36 @@ app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use("/api", csrfCookieMiddleware);
+const buildHealthPayload = () => ({
+    uptime: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+    dbState: mongoose.connection.readyState,
+});
 const healthHandler = (_req, res) => {
     res.status(200).json({
         status: "ok",
-        uptime: Math.round(process.uptime()),
-        timestamp: new Date().toISOString(),
-        dbState: mongoose.connection.readyState,
+        ...buildHealthPayload(),
     });
+};
+const readinessHandler = async (_req, res) => {
+    try {
+        await dbConnect();
+        res.status(200).json({
+            status: "ready",
+            ...buildHealthPayload(),
+        });
+    }
+    catch {
+        res.status(503).json({
+            status: "degraded",
+            ...buildHealthPayload(),
+        });
+    }
 };
 app.get("/api/health", healthHandler);
 app.get("/health", healthHandler);
+app.get("/api/ready", readinessHandler);
+app.get("/ready", readinessHandler);
 app.use("/api", requireCsrfProtection);
 const requireDb = async (_req, _res, next) => {
     try {

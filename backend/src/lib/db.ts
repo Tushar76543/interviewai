@@ -1,42 +1,42 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
+import { getEnvConfig } from "../config/env.js";
 
-// Safe DB connection logic for serverless
-// Safe DB connection logic for serverless
-let cached = (global as any).mongoose;
+let cached = (global as typeof globalThis & { mongoose?: { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null } }).mongoose;
 
 if (!cached) {
-    cached = (global as any).mongoose = { conn: null, promise: null };
+  cached = (global as typeof globalThis & { mongoose?: { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null } }).mongoose = {
+    conn: null,
+    promise: null,
+  };
 }
 
 async function dbConnect() {
-    if (cached.conn) {
-        return cached.conn;
-    }
-
-    const uri = process.env.MONGO_URI;
-    if (!uri) {
-        throw new Error("MONGO_URI environment variable is not defined");
-    }
-
-    if (!cached.promise) {
-        const opts = {
-            bufferCommands: false,
-            serverSelectionTimeoutMS: 5000,
-            socketTimeoutMS: 10000,
-        };
-
-        cached.promise = mongoose.connect(uri, opts).then((mongoose) => {
-            return mongoose;
-        });
-    }
-    try {
-        cached.conn = await cached.promise;
-    } catch (e) {
-        cached.promise = null;
-        throw e;
-    }
-
+  if (cached?.conn) {
     return cached.conn;
+  }
+
+  const { mongoUri } = getEnvConfig();
+
+  if (!cached?.promise) {
+    const opts = {
+      bufferCommands: false,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 10000,
+    };
+
+    cached!.promise = mongoose.connect(mongoUri, opts).then((mongooseInstance) => {
+      return mongooseInstance;
+    });
+  }
+
+  try {
+    cached!.conn = await cached!.promise;
+  } catch (error) {
+    cached!.promise = null;
+    throw error;
+  }
+
+  return cached!.conn;
 }
 
 export default dbConnect;

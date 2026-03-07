@@ -13,7 +13,7 @@ import axios from "axios";
 async function generateQuestion(role, difficulty, previousQuestions = []) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    throw new Error("AI provider is not configured");
+    throw new AiProviderError("AI_NOT_CONFIGURED", "OPENROUTER_API_KEY is not configured", 500);
   }
   const safeRole = cleanText(role || "Software Engineer", 80) || "Software Engineer";
   const safeDifficulty = cleanText(difficulty || "Medium", 20) || "Medium";
@@ -52,21 +52,53 @@ Return JSON only in this format:
     );
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
-      throw new Error("Empty response from AI model");
+      throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an empty response", 502);
     }
     const parsed = parseQuestion(text);
     if (!parsed) {
-      throw new Error("Invalid question format from AI model");
+      throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an invalid response format", 502);
     }
     return parsed;
-  } catch {
-    throw new Error("Failed to generate question");
+  } catch (error) {
+    if (error instanceof AiProviderError) {
+      throw error;
+    }
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const rawPayload = error.response?.data;
+      const providerMessage = typeof rawPayload === "string" ? rawPayload : typeof rawPayload === "object" && rawPayload !== null ? JSON.stringify(rawPayload) : "";
+      console.error("OpenRouter question generation error", {
+        status,
+        axiosCode: error.code,
+        message: error.message,
+        providerMessage
+      });
+      if (status === 401 || status === 403) {
+        throw new AiProviderError("AI_AUTH_FAILED", "AI API key rejected by provider", 502);
+      }
+      if (status === 429) {
+        throw new AiProviderError("AI_RATE_LIMITED", "AI provider rate limit reached", 429);
+      }
+      if (error.code === "ECONNABORTED") {
+        throw new AiProviderError("AI_TIMEOUT", "AI provider request timed out", 504);
+      }
+      throw new AiProviderError("AI_PROVIDER_ERROR", "AI provider request failed", 502);
+    }
+    console.error("Unexpected question generation error", error);
+    throw new AiProviderError("AI_PROVIDER_ERROR", "Failed to generate question", 500);
   }
 }
-var OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, cleanText, extractJson, parseQuestion;
+var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, cleanText, extractJson, parseQuestion;
 var init_openai_service = __esm({
   "backend/src/services/openai.service.ts"() {
     "use strict";
+    AiProviderError = class extends Error {
+      constructor(code, message, statusCode = 500) {
+        super(message);
+        this.code = code;
+        this.statusCode = statusCode;
+      }
+    };
     OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
     DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
     REQUEST_TIMEOUT_MS = 2e4;
@@ -576,6 +608,14 @@ var init_interview_routes = __esm({
           return res.json({ question, sessionId: session._id });
         } catch (error) {
           const isProduction4 = process.env.NODE_ENV === "production";
+          if (error instanceof AiProviderError) {
+            const message2 = isProduction4 ? error.message : `${error.message} (${error.code})`;
+            return res.status(error.statusCode).json({
+              success: false,
+              message: message2,
+              errorCode: error.code
+            });
+          }
           const message = error instanceof Error && !isProduction4 ? error.message : "Failed to generate question";
           return res.status(500).json({
             success: false,

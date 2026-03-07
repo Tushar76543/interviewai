@@ -1,5 +1,5 @@
 ﻿import { Router, Request, Response } from "express";
-import { generateQuestion } from "../services/openai.service.js";
+import { AiProviderError, generateQuestion } from "../services/openai.service.js";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import InterviewSession from "../models/interviewSession.js";
 import {
@@ -62,6 +62,16 @@ router.post(
       return res.json({ question, sessionId: session._id });
     } catch (error) {
       const isProduction = process.env.NODE_ENV === "production";
+
+      if (error instanceof AiProviderError) {
+        const message = isProduction ? error.message : `${error.message} (${error.code})`;
+        return res.status(error.statusCode).json({
+          success: false,
+          message,
+          errorCode: error.code,
+        });
+      }
+
       const message =
         error instanceof Error && !isProduction
           ? error.message

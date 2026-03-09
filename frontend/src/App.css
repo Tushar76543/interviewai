@@ -412,6 +412,35 @@
   gap: var(--space-sm);
 }
 
+.question-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.category-badge,
+.difficulty-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.category-badge {
+  background: var(--primary-100);
+  color: var(--primary-700);
+  border: 1px solid var(--primary-500);
+}
+
+.difficulty-badge {
+  background: var(--secondary-100);
+  color: var(--secondary-500);
+  border: 1px solid rgba(45, 212, 191, 0.35);
+}
+
 .timer {
   font-weight: 700;
   color: var(--primary-600);
@@ -449,6 +478,32 @@
   font-weight: 500;
 }
 
+.expected-points {
+  margin: 0 0 var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--slate-50);
+  border: 1px solid var(--slate-200);
+  border-radius: var(--radius-md);
+}
+
+.expected-points p {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--slate-700);
+  margin-bottom: var(--space-xs);
+}
+
+.expected-points ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.expected-points li {
+  color: var(--slate-600);
+  font-size: 0.92rem;
+  margin-bottom: 0.2rem;
+}
+
 .voice-controls {
   display: flex;
   gap: var(--space-sm);
@@ -482,6 +537,42 @@
 
 .answer-area {
   margin: var(--space-md) 0;
+}
+
+.answer-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-xs);
+}
+
+.answer-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  color: var(--slate-500);
+  font-size: 0.82rem;
+}
+
+.answer-shortcut {
+  font-weight: 600;
+  color: var(--slate-600);
+}
+
+.answer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.answer-short-warning {
+  margin-bottom: var(--space-sm);
+  color: var(--warning-500);
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 
 .answer-textarea {
@@ -614,5 +705,10 @@
 
   .interview-controls {
     flex-direction: column;
+  }
+
+  .answer-header {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

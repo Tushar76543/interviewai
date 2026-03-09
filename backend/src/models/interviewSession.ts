@@ -3,6 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export interface IQAEntry {
   question: string;
   answer: string;
+  category?: string;
   feedback?: {
     technical: number;
     clarity: number;
@@ -24,6 +25,7 @@ const QAEntrySchema = new Schema<IQAEntry>(
   {
     question: { type: String, required: true },
     answer: { type: String, default: "" },
+    category: { type: String },
     feedback: {
       technical: Number,
       clarity: Number,

@@ -10,23 +10,56 @@ var __export = (target, all) => {
 
 // backend/src/services/openai.service.ts
 import axios from "axios";
-async function generateQuestion(role, difficulty, previousQuestions = []) {
+async function generateQuestion(role, difficulty, previousQuestions = [], category = MIXED_CATEGORY, previousCategories = []) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new AiProviderError("AI_NOT_CONFIGURED", "OPENROUTER_API_KEY is not configured", 500);
   }
   const safeRole = cleanText(role || "Software Engineer", 80) || "Software Engineer";
   const safeDifficulty = cleanText(difficulty || "Medium", 20) || "Medium";
+  const resolvedDifficulty = SUPPORTED_DIFFICULTIES.find(
+    (item) => item.toLowerCase() === safeDifficulty.toLowerCase()
+  ) ? (safeDifficulty[0].toUpperCase() + safeDifficulty.slice(1).toLowerCase()).replace(
+    "Faang",
+    "FAANG"
+  ) : "Medium";
   const safePrevious = previousQuestions.filter((item) => typeof item === "string").map((item) => cleanText(item, 500)).filter(Boolean).slice(0, 20);
-  const previousList = safePrevious.length ? `Avoid repeating these previous prompts:
-${safePrevious.join("\n")}` : "";
+  const safePreviousCategories = previousCategories.filter((item) => typeof item === "string").map((item) => cleanText(item, 60)).filter(Boolean).slice(0, 20);
+  const categoryPool = getCategoryPool(safeRole);
+  const requestedCategory = cleanText(category || MIXED_CATEGORY, 60) || MIXED_CATEGORY;
+  const resolvedCategory = resolveCategory(
+    requestedCategory,
+    categoryPool,
+    safePreviousCategories,
+    safePrevious.length
+  );
+  const previousPromptGuidance = safePrevious.length ? `Avoid repeating these previous prompts:
+${safePrevious.join("\n")}` : "No previous prompts are provided yet.";
+  const previousCategoryGuidance = safePreviousCategories.length ? `Recent categories used: ${safePreviousCategories.join(", ")}. Prefer a different angle when possible.` : "";
   const prompt = `
-You are an expert interviewer.
-Generate one unique ${safeDifficulty} interview question for a ${safeRole} role.
-${previousList}
+You are a senior interviewer running a realistic mock interview.
+
+Candidate role: ${safeRole}
+Difficulty: ${resolvedDifficulty}
+Focus category: ${resolvedCategory}
+
+Question requirements:
+- Ask exactly one realistic interview question in 1 to 3 sentences.
+- Use practical context (trade-offs, incidents, constraints, metrics, timelines, collaboration).
+- Avoid trivia and yes/no-only prompts.
+- Keep the question interview-ready and conversational.
+- Match the challenge level to difficulty.
+
+${previousPromptGuidance}
+${previousCategoryGuidance}
+
+Set timeLimitSec by complexity:
+- Easy: 90 to 150
+- Medium: 120 to 210
+- FAANG: 180 to 300
 
 Return JSON only in this format:
-{"qid":"q1","prompt":"<question>","expectedPoints":["point1","point2"],"timeLimitSec":120}
+{"qid":"q1","category":"<category>","prompt":"<question>","expectedPoints":["point1","point2","point3"],"timeLimitSec":150}
 `;
   const referer = process.env.FRONTEND_URL?.startsWith("http") ? process.env.FRONTEND_URL : "https://interviewai.app";
   try {
@@ -38,7 +71,7 @@ Return JSON only in this format:
           { role: "system", content: "You are an AI Interview Coach." },
           { role: "user", content: prompt }
         ],
-        temperature: 0.7
+        temperature: 0.85
       },
       {
         timeout: REQUEST_TIMEOUT_MS,
@@ -54,7 +87,7 @@ Return JSON only in this format:
     if (typeof text !== "string" || !text.trim()) {
       throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an empty response", 502);
     }
-    const parsed = parseQuestion(text);
+    const parsed = parseQuestion(text, resolvedCategory, resolvedDifficulty);
     if (!parsed) {
       throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an invalid response format", 502);
     }
@@ -88,7 +121,7 @@ Return JSON only in this format:
     throw new AiProviderError("AI_PROVIDER_ERROR", "Failed to generate question", 500);
   }
 }
-var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, cleanText, extractJson, parseQuestion;
+var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, MIXED_CATEGORY, SUPPORTED_DIFFICULTIES, cleanText, defaultTimeLimitByDifficulty, getCategoryPool, resolveCategory, extractJson, parseQuestion;
 var init_openai_service = __esm({
   "backend/src/services/openai.service.ts"() {
     "use strict";
@@ -102,7 +135,79 @@ var init_openai_service = __esm({
     OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
     DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
     REQUEST_TIMEOUT_MS = 2e4;
+    MIXED_CATEGORY = "Mixed";
+    SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"];
     cleanText = (value, maxLength) => value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+    defaultTimeLimitByDifficulty = (difficulty) => {
+      if (difficulty === "Easy") return 120;
+      if (difficulty === "FAANG") return 240;
+      return 180;
+    };
+    getCategoryPool = (role) => {
+      const normalizedRole = role.toLowerCase();
+      const base = [
+        "Behavioral",
+        "Communication",
+        "Problem Solving",
+        "Project Deep Dive"
+      ];
+      const engineering = [
+        "Technical Fundamentals",
+        "System Design",
+        "Debugging",
+        "Testing and Quality",
+        "Performance",
+        "Security"
+      ];
+      const aiData = [
+        "ML Fundamentals",
+        "Data Modeling",
+        "Experimentation",
+        "Model Evaluation",
+        "Responsible AI"
+      ];
+      const product = [
+        "Product Sense",
+        "Prioritization",
+        "Stakeholder Management",
+        "Execution Planning"
+      ];
+      const leadership = [
+        "Leadership and Ownership",
+        "Mentoring",
+        "Conflict Resolution",
+        "Cross-functional Collaboration"
+      ];
+      const includeEngineering = /(engineer|developer|sre|devops|architect|qa|test|programmer)/i.test(
+        normalizedRole
+      );
+      const includeAiData = /(ai|ml|machine learning|data scientist|data engineer|analytics)/i.test(
+        normalizedRole
+      );
+      const includeProduct = /(product|pm|program manager|analyst)/i.test(normalizedRole);
+      const includeLeadership = /(manager|lead|director|head|principal|staff)/i.test(normalizedRole);
+      const pool = [
+        ...base,
+        ...includeEngineering ? engineering : [],
+        ...includeAiData ? aiData : [],
+        ...includeProduct ? product : [],
+        ...includeLeadership ? leadership : []
+      ];
+      return Array.from(new Set(pool));
+    };
+    resolveCategory = (requestedCategory, categoryPool, previousCategories, previousQuestionCount) => {
+      if (!requestedCategory || requestedCategory.toLowerCase() === MIXED_CATEGORY.toLowerCase()) {
+        const recent = previousCategories.slice(-3).map((item) => item.toLowerCase());
+        const available = categoryPool.filter((item) => !recent.includes(item.toLowerCase()));
+        const rotationPool = available.length > 0 ? available : categoryPool;
+        const index = previousQuestionCount % rotationPool.length;
+        return rotationPool[index];
+      }
+      const matched = categoryPool.find(
+        (item) => item.toLowerCase() === requestedCategory.toLowerCase()
+      );
+      return matched ?? (cleanText(requestedCategory, 60) || MIXED_CATEGORY);
+    };
     extractJson = (value) => {
       const trimmed = value.trim();
       if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
@@ -111,19 +216,21 @@ var init_openai_service = __esm({
       const match = trimmed.match(/\{[\s\S]*\}/);
       return match ? match[0] : "";
     };
-    parseQuestion = (raw) => {
+    parseQuestion = (raw, fallbackCategory, fallbackDifficulty) => {
       try {
         const parsed = JSON.parse(extractJson(raw));
         if (!parsed || typeof parsed.prompt !== "string") {
           return null;
         }
         const prompt = cleanText(parsed.prompt, 1e3);
+        const category = typeof parsed.category === "string" && parsed.category.trim() ? cleanText(parsed.category, 60) : fallbackCategory;
         const expectedPoints = Array.isArray(parsed.expectedPoints) ? parsed.expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText(item, 240)).filter(Boolean).slice(0, 6) : [];
         return {
           qid: typeof parsed.qid === "string" && parsed.qid.trim() ? parsed.qid.trim() : "q1",
+          category,
           prompt,
           expectedPoints,
-          timeLimitSec: typeof parsed.timeLimitSec === "number" && parsed.timeLimitSec > 0 ? Math.min(parsed.timeLimitSec, 600) : 120
+          timeLimitSec: typeof parsed.timeLimitSec === "number" && parsed.timeLimitSec > 0 ? Math.min(parsed.timeLimitSec, 600) : defaultTimeLimitByDifficulty(fallbackDifficulty)
         };
       } catch {
         return null;
@@ -211,6 +318,7 @@ var init_interviewSession = __esm({
       {
         question: { type: String, required: true },
         answer: { type: String, default: "" },
+        category: { type: String },
         feedback: {
           technical: Number,
           clarity: Number,
@@ -249,12 +357,13 @@ function handleValidationErrors(req, res, next) {
   }
   next();
 }
-var ROLE_MIN_LENGTH, ROLE_MAX_LENGTH, QUESTION_MAX_LENGTH, ANSWER_MAX_LENGTH, signupValidation, loginValidation, interviewStartValidation, feedbackValidation;
+var ROLE_MIN_LENGTH, ROLE_MAX_LENGTH, CATEGORY_MAX_LENGTH, QUESTION_MAX_LENGTH, ANSWER_MAX_LENGTH, signupValidation, loginValidation, interviewStartValidation, feedbackValidation;
 var init_validation_middleware = __esm({
   "backend/src/middleware/validation.middleware.ts"() {
     "use strict";
     ROLE_MIN_LENGTH = 2;
     ROLE_MAX_LENGTH = 80;
+    CATEGORY_MAX_LENGTH = 60;
     QUESTION_MAX_LENGTH = 1e3;
     ANSWER_MAX_LENGTH = 5e3;
     signupValidation = [
@@ -269,8 +378,11 @@ var init_validation_middleware = __esm({
     interviewStartValidation = [
       body("role").optional().isString().trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
       body("difficulty").optional().isString().trim().isIn(["Easy", "Medium", "FAANG"]).withMessage("Difficulty must be one of: Easy, Medium, FAANG"),
+      body("category").optional().isString().trim().isLength({ min: 2, max: CATEGORY_MAX_LENGTH }).withMessage(`Category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
       body("previousQuestions").optional().isArray({ max: 20 }).withMessage("previousQuestions can contain at most 20 items"),
       body("previousQuestions.*").optional().isString().trim().isLength({ min: 3, max: QUESTION_MAX_LENGTH }).withMessage(`Each previous question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
+      body("previousCategories").optional().isArray({ max: 20 }).withMessage("previousCategories can contain at most 20 items"),
+      body("previousCategories.*").optional().isString().trim().isLength({ min: 2, max: CATEGORY_MAX_LENGTH }).withMessage(`Each previous category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
       body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
     ];
     feedbackValidation = [
@@ -570,14 +682,18 @@ var init_interview_routes = __esm({
       async (req, res) => {
         try {
           const user = req.user;
-          const { role, difficulty, previousQuestions, sessionId } = req.body;
+          const { role, difficulty, category, previousQuestions, previousCategories, sessionId } = req.body;
           const resolvedRole = role || "Software Engineer";
           const resolvedDifficulty = difficulty || "Medium";
+          const resolvedCategory = category || "Mixed";
           const prior = Array.isArray(previousQuestions) ? previousQuestions : [];
+          const priorCategories = Array.isArray(previousCategories) ? previousCategories : [];
           const question = await generateQuestion(
             resolvedRole,
             resolvedDifficulty,
-            prior
+            prior,
+            resolvedCategory,
+            priorCategories
           );
           let session;
           if (sessionId) {
@@ -585,7 +701,7 @@ var init_interview_routes = __esm({
               { _id: sessionId, userId: user._id },
               {
                 $push: {
-                  questions: { question: question.prompt, answer: "" }
+                  questions: { question: question.prompt, answer: "", category: question.category }
                 },
                 lastActivityAt: /* @__PURE__ */ new Date()
               },
@@ -596,7 +712,7 @@ var init_interview_routes = __esm({
               userId: user._id,
               role: resolvedRole,
               difficulty: resolvedDifficulty,
-              questions: [{ question: question.prompt, answer: "" }]
+              questions: [{ question: question.prompt, answer: "", category: question.category }]
             });
           }
           if (!session) {
@@ -786,9 +902,11 @@ var init_feedback_routes = __esm({
               session.questions[lastIdx].answer = answer;
               session.questions[lastIdx].feedback = result.feedback;
               if (result.followUp?.prompt) {
+                const followUpCategory = session.questions[lastIdx].category;
                 session.questions.push({
                   question: result.followUp.prompt,
-                  answer: ""
+                  answer: "",
+                  category: followUpCategory
                 });
               }
               session.lastActivityAt = /* @__PURE__ */ new Date();

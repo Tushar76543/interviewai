@@ -3,6 +3,7 @@ import { body, validationResult } from "express-validator";
 
 const ROLE_MIN_LENGTH = 2;
 const ROLE_MAX_LENGTH = 80;
+const CATEGORY_MAX_LENGTH = 60;
 const QUESTION_MAX_LENGTH = 1000;
 const ANSWER_MAX_LENGTH = 5000;
 
@@ -39,6 +40,12 @@ export const interviewStartValidation = [
     .trim()
     .isIn(["Easy", "Medium", "FAANG"])
     .withMessage("Difficulty must be one of: Easy, Medium, FAANG"),
+  body("category")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 2, max: CATEGORY_MAX_LENGTH })
+    .withMessage(`Category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
   body("previousQuestions")
     .optional()
     .isArray({ max: 20 })
@@ -49,6 +56,16 @@ export const interviewStartValidation = [
     .trim()
     .isLength({ min: 3, max: QUESTION_MAX_LENGTH })
     .withMessage(`Each previous question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
+  body("previousCategories")
+    .optional()
+    .isArray({ max: 20 })
+    .withMessage("previousCategories can contain at most 20 items"),
+  body("previousCategories.*")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 2, max: CATEGORY_MAX_LENGTH })
+    .withMessage(`Each previous category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
   body("sessionId")
     .optional()
     .isMongoId()

@@ -8,16 +8,18 @@ const router = Router();
 router.post("/start", authMiddleware, interviewRateLimit, ...interviewStartValidation, handleValidationErrors, async (req, res) => {
     try {
         const user = req.user;
-        const { role, difficulty, previousQuestions, sessionId } = req.body;
+        const { role, difficulty, category, previousQuestions, previousCategories, sessionId } = req.body;
         const resolvedRole = role || "Software Engineer";
         const resolvedDifficulty = difficulty || "Medium";
+        const resolvedCategory = category || "Mixed";
         const prior = Array.isArray(previousQuestions) ? previousQuestions : [];
-        const question = await generateQuestion(resolvedRole, resolvedDifficulty, prior);
+        const priorCategories = Array.isArray(previousCategories) ? previousCategories : [];
+        const question = await generateQuestion(resolvedRole, resolvedDifficulty, prior, resolvedCategory, priorCategories);
         let session;
         if (sessionId) {
             session = await InterviewSession.findOneAndUpdate({ _id: sessionId, userId: user._id }, {
                 $push: {
-                    questions: { question: question.prompt, answer: "" },
+                    questions: { question: question.prompt, answer: "", category: question.category },
                 },
                 lastActivityAt: new Date(),
             }, { new: true });
@@ -27,7 +29,7 @@ router.post("/start", authMiddleware, interviewRateLimit, ...interviewStartValid
                 userId: user._id,
                 role: resolvedRole,
                 difficulty: resolvedDifficulty,
-                questions: [{ question: question.prompt, answer: "" }],
+                questions: [{ question: question.prompt, answer: "", category: question.category }],
             });
         }
         if (!session) {

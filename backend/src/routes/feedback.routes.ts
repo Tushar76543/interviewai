@@ -35,9 +35,11 @@ router.post(
           session.questions[lastIdx].feedback = result.feedback;
 
           if (result.followUp?.prompt) {
+            const followUpCategory = session.questions[lastIdx].category;
             session.questions.push({
               question: result.followUp.prompt,
               answer: "",
+              category: followUpCategory,
             });
           }
 

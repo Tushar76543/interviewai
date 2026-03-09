@@ -2,6 +2,7 @@ import axios from "axios";
 
 type GeneratedQuestion = {
   qid: string;
+  category: string;
   prompt: string;
   expectedPoints: string[];
   timeLimitSec: number;
@@ -29,9 +30,99 @@ export class AiProviderError extends Error {
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
 const REQUEST_TIMEOUT_MS = 20000;
+const MIXED_CATEGORY = "Mixed";
+const SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"] as const;
 
 const cleanText = (value: string, maxLength: number) =>
   value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+
+const defaultTimeLimitByDifficulty = (difficulty: string) => {
+  if (difficulty === "Easy") return 120;
+  if (difficulty === "FAANG") return 240;
+  return 180;
+};
+
+const getCategoryPool = (role: string) => {
+  const normalizedRole = role.toLowerCase();
+
+  const base = [
+    "Behavioral",
+    "Communication",
+    "Problem Solving",
+    "Project Deep Dive",
+  ];
+
+  const engineering = [
+    "Technical Fundamentals",
+    "System Design",
+    "Debugging",
+    "Testing and Quality",
+    "Performance",
+    "Security",
+  ];
+
+  const aiData = [
+    "ML Fundamentals",
+    "Data Modeling",
+    "Experimentation",
+    "Model Evaluation",
+    "Responsible AI",
+  ];
+
+  const product = [
+    "Product Sense",
+    "Prioritization",
+    "Stakeholder Management",
+    "Execution Planning",
+  ];
+
+  const leadership = [
+    "Leadership and Ownership",
+    "Mentoring",
+    "Conflict Resolution",
+    "Cross-functional Collaboration",
+  ];
+
+  const includeEngineering = /(engineer|developer|sre|devops|architect|qa|test|programmer)/i.test(
+    normalizedRole
+  );
+  const includeAiData = /(ai|ml|machine learning|data scientist|data engineer|analytics)/i.test(
+    normalizedRole
+  );
+  const includeProduct = /(product|pm|program manager|analyst)/i.test(normalizedRole);
+  const includeLeadership = /(manager|lead|director|head|principal|staff)/i.test(normalizedRole);
+
+  const pool = [
+    ...base,
+    ...(includeEngineering ? engineering : []),
+    ...(includeAiData ? aiData : []),
+    ...(includeProduct ? product : []),
+    ...(includeLeadership ? leadership : []),
+  ];
+
+  return Array.from(new Set(pool));
+};
+
+const resolveCategory = (
+  requestedCategory: string,
+  categoryPool: string[],
+  previousCategories: string[],
+  previousQuestionCount: number
+) => {
+  if (!requestedCategory || requestedCategory.toLowerCase() === MIXED_CATEGORY.toLowerCase()) {
+    const recent = previousCategories.slice(-3).map((item) => item.toLowerCase());
+    const available = categoryPool.filter((item) => !recent.includes(item.toLowerCase()));
+    const rotationPool = available.length > 0 ? available : categoryPool;
+    const index = previousQuestionCount % rotationPool.length;
+    return rotationPool[index];
+  }
+
+  const matched = categoryPool.find(
+    (item) => item.toLowerCase() === requestedCategory.toLowerCase()
+  );
+
+  return matched ?? (cleanText(requestedCategory, 60) || MIXED_CATEGORY);
+};
 
 const extractJson = (value: string) => {
   const trimmed = value.trim();
@@ -43,7 +134,11 @@ const extractJson = (value: string) => {
   return match ? match[0] : "";
 };
 
-const parseQuestion = (raw: string): GeneratedQuestion | null => {
+const parseQuestion = (
+  raw: string,
+  fallbackCategory: string,
+  fallbackDifficulty: string
+): GeneratedQuestion | null => {
   try {
     const parsed = JSON.parse(extractJson(raw)) as Partial<GeneratedQuestion>;
     if (!parsed || typeof parsed.prompt !== "string") {
@@ -51,6 +146,10 @@ const parseQuestion = (raw: string): GeneratedQuestion | null => {
     }
 
     const prompt = cleanText(parsed.prompt, 1000);
+    const category =
+      typeof parsed.category === "string" && parsed.category.trim()
+        ? cleanText(parsed.category, 60)
+        : fallbackCategory;
     const expectedPoints = Array.isArray(parsed.expectedPoints)
       ? parsed.expectedPoints
           .filter((item): item is string => typeof item === "string")
@@ -61,12 +160,13 @@ const parseQuestion = (raw: string): GeneratedQuestion | null => {
 
     return {
       qid: typeof parsed.qid === "string" && parsed.qid.trim() ? parsed.qid.trim() : "q1",
+      category,
       prompt,
       expectedPoints,
       timeLimitSec:
         typeof parsed.timeLimitSec === "number" && parsed.timeLimitSec > 0
           ? Math.min(parsed.timeLimitSec, 600)
-          : 120,
+          : defaultTimeLimitByDifficulty(fallbackDifficulty),
     };
   } catch {
     return null;
@@ -76,7 +176,9 @@ const parseQuestion = (raw: string): GeneratedQuestion | null => {
 export async function generateQuestion(
   role: string,
   difficulty: string,
-  previousQuestions: string[] = []
+  previousQuestions: string[] = [],
+  category: string = MIXED_CATEGORY,
+  previousCategories: string[] = []
 ): Promise<GeneratedQuestion> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -85,23 +187,64 @@ export async function generateQuestion(
 
   const safeRole = cleanText(role || "Software Engineer", 80) || "Software Engineer";
   const safeDifficulty = cleanText(difficulty || "Medium", 20) || "Medium";
+  const resolvedDifficulty = SUPPORTED_DIFFICULTIES.find(
+    (item) => item.toLowerCase() === safeDifficulty.toLowerCase()
+  )
+    ? (safeDifficulty[0].toUpperCase() + safeDifficulty.slice(1).toLowerCase()).replace(
+        "Faang",
+        "FAANG"
+      )
+    : "Medium";
   const safePrevious = previousQuestions
     .filter((item): item is string => typeof item === "string")
     .map((item) => cleanText(item, 500))
     .filter(Boolean)
     .slice(0, 20);
+  const safePreviousCategories = previousCategories
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => cleanText(item, 60))
+    .filter(Boolean)
+    .slice(0, 20);
+  const categoryPool = getCategoryPool(safeRole);
+  const requestedCategory = cleanText(category || MIXED_CATEGORY, 60) || MIXED_CATEGORY;
+  const resolvedCategory = resolveCategory(
+    requestedCategory,
+    categoryPool,
+    safePreviousCategories,
+    safePrevious.length
+  );
 
-  const previousList = safePrevious.length
+  const previousPromptGuidance = safePrevious.length
     ? `Avoid repeating these previous prompts:\n${safePrevious.join("\n")}`
+    : "No previous prompts are provided yet.";
+  const previousCategoryGuidance = safePreviousCategories.length
+    ? `Recent categories used: ${safePreviousCategories.join(", ")}. Prefer a different angle when possible.`
     : "";
 
   const prompt = `
-You are an expert interviewer.
-Generate one unique ${safeDifficulty} interview question for a ${safeRole} role.
-${previousList}
+You are a senior interviewer running a realistic mock interview.
+
+Candidate role: ${safeRole}
+Difficulty: ${resolvedDifficulty}
+Focus category: ${resolvedCategory}
+
+Question requirements:
+- Ask exactly one realistic interview question in 1 to 3 sentences.
+- Use practical context (trade-offs, incidents, constraints, metrics, timelines, collaboration).
+- Avoid trivia and yes/no-only prompts.
+- Keep the question interview-ready and conversational.
+- Match the challenge level to difficulty.
+
+${previousPromptGuidance}
+${previousCategoryGuidance}
+
+Set timeLimitSec by complexity:
+- Easy: 90 to 150
+- Medium: 120 to 210
+- FAANG: 180 to 300
 
 Return JSON only in this format:
-{"qid":"q1","prompt":"<question>","expectedPoints":["point1","point2"],"timeLimitSec":120}
+{"qid":"q1","category":"<category>","prompt":"<question>","expectedPoints":["point1","point2","point3"],"timeLimitSec":150}
 `;
 
   const referer = process.env.FRONTEND_URL?.startsWith("http")
@@ -117,7 +260,7 @@ Return JSON only in this format:
           { role: "system", content: "You are an AI Interview Coach." },
           { role: "user", content: prompt },
         ],
-        temperature: 0.7,
+        temperature: 0.85,
       },
       {
         timeout: REQUEST_TIMEOUT_MS,
@@ -135,7 +278,7 @@ Return JSON only in this format:
       throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an empty response", 502);
     }
 
-    const parsed = parseQuestion(text);
+    const parsed = parseQuestion(text, resolvedCategory, resolvedDifficulty);
     if (!parsed) {
       throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an invalid response format", 502);
     }

@@ -20,9 +20,11 @@ router.post("/", authMiddleware, feedbackRateLimit, ...feedbackValidation, handl
                 session.questions[lastIdx].answer = answer;
                 session.questions[lastIdx].feedback = result.feedback;
                 if (result.followUp?.prompt) {
+                    const followUpCategory = session.questions[lastIdx].category;
                     session.questions.push({
                         question: result.followUp.prompt,
                         answer: "",
+                        category: followUpCategory,
                     });
                 }
                 session.lastActivityAt = new Date();

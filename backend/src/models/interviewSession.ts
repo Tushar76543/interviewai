@@ -7,6 +7,9 @@ export interface IQAEntry {
   speechTranscript?: string;
   answerDurationSec?: number;
   cameraSnapshot?: string;
+  recordingFileId?: string;
+  recordingMimeType?: string;
+  recordingSizeBytes?: number;
   feedback?: {
     technical: number;
     clarity: number;
@@ -35,6 +38,9 @@ const QAEntrySchema = new Schema<IQAEntry>(
     speechTranscript: { type: String, maxlength: 5000 },
     answerDurationSec: { type: Number, min: 0, max: 7200 },
     cameraSnapshot: { type: String, maxlength: 450000 },
+    recordingFileId: { type: String },
+    recordingMimeType: { type: String },
+    recordingSizeBytes: { type: Number, min: 0 },
     feedback: {
       technical: Number,
       clarity: Number,

@@ -154,8 +154,17 @@ function Interview() {
   const [voiceModeActive, setVoiceModeActive] = useState(false);
   const [speechLanguage, setSpeechLanguage] = useState("en-US");
   const [speechTranscriptLog, setSpeechTranscriptLog] = useState("");
+  const [isVideoRecording, setIsVideoRecording] = useState(false);
+  const [recordingStatus, setRecordingStatus] = useState("");
+  const [recordingError, setRecordingError] = useState("");
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [recordingUrl, setRecordingUrl] = useState("");
+  const [recordingDurationSec, setRecordingDurationSec] = useState(0);
 
   const webcamRef = useRef<Webcam | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingStartRef = useRef<number | null>(null);
 
   const isBusy = isGeneratingQuestion || isSubmittingAnswer;
   const isTechnicalRole = useMemo(
@@ -261,14 +270,36 @@ function Interview() {
     setVoiceModeActive(false);
     SpeechRecognition.stopListening();
     resetTranscript();
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      recorder.stop();
+    }
+    setIsVideoRecording(false);
+    setRecordingBlob(null);
+    setRecordingDurationSec(0);
+    setRecordingStatus("");
+    setRecordingError("");
+    setRecordingUrl((prev) => {
+      if (prev) {
+        URL.revokeObjectURL(prev);
+      }
+      return "";
+    });
   }, [questionPrompt, resetTranscript]);
 
   useEffect(() => {
     return () => {
       window.speechSynthesis.cancel();
       SpeechRecognition.abortListening();
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop();
+      }
+      if (recordingUrl) {
+        URL.revokeObjectURL(recordingUrl);
+      }
     };
-  }, []);
+  }, [recordingUrl]);
 
   const speak = useCallback((text: string) => {
     window.speechSynthesis.cancel();
@@ -388,6 +419,122 @@ function Interview() {
     return shot;
   }, [showCamera]);
 
+  const clearRecordingArtifacts = useCallback(() => {
+    if (recordingUrl) {
+      URL.revokeObjectURL(recordingUrl);
+    }
+    setRecordingUrl("");
+    setRecordingBlob(null);
+    setRecordingDurationSec(0);
+    setRecordingStatus("");
+    setRecordingError("");
+  }, [recordingUrl]);
+
+  const stopVideoRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      setIsVideoRecording(false);
+      return;
+    }
+    recorder.stop();
+  }, []);
+
+  const startVideoRecording = useCallback(() => {
+    if (!showCamera) {
+      setRecordingError("Enable camera first.");
+      return;
+    }
+
+    const stream = webcamRef.current?.stream;
+    if (!stream) {
+      setRecordingError("Camera stream is unavailable. Allow camera access and try again.");
+      return;
+    }
+
+    if (typeof MediaRecorder === "undefined") {
+      setRecordingError("Video recording is not supported in this browser.");
+      return;
+    }
+
+    clearRecordingArtifacts();
+    recordingChunksRef.current = [];
+    setRecordingError("");
+    setRecordingStatus("Recording in progress...");
+    recordingStartRef.current = Date.now();
+
+    const mimeCandidates = [
+      "video/webm;codecs=vp9,opus",
+      "video/webm;codecs=vp8,opus",
+      "video/webm",
+      "video/mp4",
+    ];
+    const selectedMime = mimeCandidates.find((mime) => MediaRecorder.isTypeSupported(mime));
+
+    const recorder = selectedMime
+      ? new MediaRecorder(stream, {
+          mimeType: selectedMime,
+          videoBitsPerSecond: 900000,
+        })
+      : new MediaRecorder(stream);
+
+    recorder.ondataavailable = (event: BlobEvent) => {
+      if (event.data && event.data.size > 0) {
+        recordingChunksRef.current.push(event.data);
+      }
+    };
+
+    recorder.onerror = () => {
+      setRecordingError("Recording failed. Please retry.");
+      setRecordingStatus("");
+      setIsVideoRecording(false);
+    };
+
+    recorder.onstop = () => {
+      const mimeType = recorder.mimeType || selectedMime || "video/webm";
+      const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+      const nextUrl = URL.createObjectURL(blob);
+      const startedAt = recordingStartRef.current ?? Date.now();
+      const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
+
+      setRecordingBlob(blob);
+      setRecordingUrl(nextUrl);
+      setRecordingDurationSec(durationSeconds);
+      setIsVideoRecording(false);
+      setRecordingStatus("Recording captured. It will be saved to history after submit.");
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start(1000);
+    setIsVideoRecording(true);
+  }, [clearRecordingArtifacts, showCamera]);
+
+  useEffect(() => {
+    if (showCamera) {
+      return;
+    }
+
+    stopVideoRecording();
+    setIsVideoRecording(false);
+  }, [showCamera, stopVideoRecording]);
+
+  const uploadRecordingIfNeeded = useCallback(async () => {
+    if (!recordingBlob || !sessionId) {
+      return;
+    }
+
+    const extension = recordingBlob.type.includes("mp4") ? "mp4" : "webm";
+    const formData = new FormData();
+    formData.append("recording", recordingBlob, `answer-recording-${Date.now()}.${extension}`);
+    formData.append("sessionId", sessionId);
+
+    await api.post("/interview/recording", formData, {
+      timeout: 20000,
+      headers: {
+        "Content-Type": "multipart/form-data",
+      },
+    });
+  }, [recordingBlob, sessionId]);
+
   const submitAnswer = useCallback(async () => {
     if (!question) return;
 
@@ -413,6 +560,15 @@ function Interview() {
     const cameraSnapshot = captureCameraSnapshot();
 
     try {
+      setRecordingError("");
+      if (recordingBlob && sessionId) {
+        try {
+          await uploadRecordingIfNeeded();
+        } catch (uploadError: unknown) {
+          setRecordingError(extractApiErrorMessage(uploadError, "Recording upload failed. Continuing without video."));
+        }
+      }
+
       const res = await api.post("/interview/feedback", {
         role,
         question: question.prompt,
@@ -465,11 +621,13 @@ function Interview() {
     category,
     elapsedSeconds,
     listening,
+    recordingBlob,
     question,
     role,
     sessionId,
     speak,
     speechTranscriptLog,
+    uploadRecordingIfNeeded,
   ]);
 
   useEffect(() => {
@@ -596,7 +754,9 @@ function Interview() {
 
       {error && <div className="error-message">{error}</div>}
       {voiceError && <div className="error-message">{voiceError}</div>}
+      {recordingError && <div className="error-message">{recordingError}</div>}
       {templateNotice && <div className="notice-message">{templateNotice}</div>}
+      {recordingStatus && <div className="notice-message">{recordingStatus}</div>}
 
       {question && (
         <div className="question-card">
@@ -786,6 +946,8 @@ function Interview() {
                   borderRadius: "12px",
                   overflow: "hidden",
                   border: "1px solid var(--primary-600)",
+                  padding: "0.5rem",
+                  background: "var(--slate-50)",
                 }}
               >
                 <Webcam
@@ -797,6 +959,37 @@ function Interview() {
                   screenshotQuality={0.6}
                   videoConstraints={{ width: 640, height: 360, facingMode: "user" }}
                 />
+                <div className="camera-recording-controls">
+                  {!isVideoRecording ? (
+                    <button
+                      type="button"
+                      onClick={startVideoRecording}
+                      className="btn-secondary btn-sm"
+                      disabled={isBusy}
+                    >
+                      Start Video Recording
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={stopVideoRecording}
+                      className="btn-secondary btn-sm"
+                    >
+                      Stop Video Recording
+                    </button>
+                  )}
+                  {recordingDurationSec > 0 && (
+                    <span className="recording-status">
+                      Captured: {formatElapsedTime(recordingDurationSec)}
+                    </span>
+                  )}
+                </div>
+                {recordingUrl && (
+                  <div className="recorded-video-preview">
+                    <p>Recorded preview:</p>
+                    <video src={recordingUrl} controls preload="metadata" />
+                  </div>
+                )}
               </div>
             )}
 

@@ -423,6 +423,9 @@ var init_interviewSession = __esm({
         speechTranscript: { type: String, maxlength: 5e3 },
         answerDurationSec: { type: Number, min: 0, max: 7200 },
         cameraSnapshot: { type: String, maxlength: 45e4 },
+        recordingFileId: { type: String },
+        recordingMimeType: { type: String },
+        recordingSizeBytes: { type: Number, min: 0 },
         feedback: {
           technical: Number,
           clarity: Number,
@@ -711,7 +714,7 @@ var init_rateLimitStore = __esm({
 });
 
 // backend/src/middleware/rateLimit.middleware.ts
-var rateLimitStore, getClientKey, createRateLimiter, authRateLimit, interviewRateLimit, feedbackRateLimit, resumeRateLimit;
+var rateLimitStore, getClientKey, createRateLimiter, authRateLimit, interviewRateLimit, feedbackRateLimit, resumeRateLimit, recordingRateLimit;
 var init_rateLimit_middleware = __esm({
   "backend/src/middleware/rateLimit.middleware.ts"() {
     "use strict";
@@ -774,6 +777,12 @@ var init_rateLimit_middleware = __esm({
       windowMs: 5 * 60 * 1e3,
       max: 10,
       message: "Too many resume upload attempts. Please wait and try again."
+    });
+    recordingRateLimit = createRateLimiter({
+      bucket: "rl:recording",
+      windowMs: 60 * 1e3,
+      max: 12,
+      message: "Too many recording uploads. Please slow down."
     });
   }
 });
@@ -1783,8 +1792,276 @@ var init_resume_routes = __esm({
   }
 });
 
-// backend/src/lib/db.ts
+// backend/src/lib/recordingStore.ts
 import mongoose4 from "mongoose";
+var RECORDING_BUCKET, toObjectId, getBucket, saveRecordingFile, getRecordingFileById, deleteRecordingFile, streamRecordingFile;
+var init_recordingStore = __esm({
+  "backend/src/lib/recordingStore.ts"() {
+    "use strict";
+    RECORDING_BUCKET = "interview_recordings";
+    toObjectId = (value) => {
+      if (!mongoose4.isValidObjectId(value)) {
+        throw new Error("Invalid recording id");
+      }
+      return new mongoose4.Types.ObjectId(value);
+    };
+    getBucket = () => {
+      const db = mongoose4.connection.db;
+      if (!db) {
+        throw new Error("Database connection is not ready");
+      }
+      return new mongoose4.mongo.GridFSBucket(db, {
+        bucketName: RECORDING_BUCKET
+      });
+    };
+    saveRecordingFile = async (params) => {
+      const bucket = getBucket();
+      const { buffer, filename, mimeType, metadata } = params;
+      const uploadStream = bucket.openUploadStream(filename, {
+        contentType: mimeType,
+        metadata
+      });
+      const fileId = await new Promise((resolve, reject) => {
+        uploadStream.on("finish", () => resolve(uploadStream.id));
+        uploadStream.on("error", reject);
+        uploadStream.end(buffer);
+      });
+      return {
+        fileId: fileId.toString(),
+        mimeType,
+        sizeBytes: buffer.length
+      };
+    };
+    getRecordingFileById = async (fileId) => {
+      const bucket = getBucket();
+      const id = toObjectId(fileId);
+      const file = await bucket.find({ _id: id }).limit(1).next();
+      return file ?? null;
+    };
+    deleteRecordingFile = async (fileId) => {
+      try {
+        const bucket = getBucket();
+        const id = toObjectId(fileId);
+        await bucket.delete(id);
+      } catch {
+      }
+    };
+    streamRecordingFile = async (params) => {
+      const { fileId, rangeHeader, res } = params;
+      const bucket = getBucket();
+      const fileDoc = await getRecordingFileById(fileId);
+      if (!fileDoc) {
+        return false;
+      }
+      const contentType = typeof fileDoc.contentType === "string" && fileDoc.contentType.trim() ? fileDoc.contentType : "video/webm";
+      const fileLength = Number(fileDoc.length || 0);
+      const objectId = fileDoc._id;
+      if (rangeHeader && /^bytes=\d*-\d*$/i.test(rangeHeader)) {
+        const [startPart, endPart] = rangeHeader.replace(/bytes=/i, "").split("-");
+        const start = Number.parseInt(startPart, 10);
+        const end = endPart ? Number.parseInt(endPart, 10) : fileLength - 1;
+        if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && end < fileLength) {
+          const chunkSize = end - start + 1;
+          res.status(206);
+          res.setHeader("Content-Type", contentType);
+          res.setHeader("Accept-Ranges", "bytes");
+          res.setHeader("Content-Range", `bytes ${start}-${end}/${fileLength}`);
+          res.setHeader("Content-Length", chunkSize.toString());
+          res.setHeader("Cache-Control", "private, max-age=300");
+          const stream2 = bucket.openDownloadStream(objectId, {
+            start,
+            end: end + 1
+          });
+          stream2.on("error", () => {
+            if (!res.headersSent) {
+              res.status(500).end();
+            }
+          });
+          stream2.pipe(res);
+          return true;
+        }
+      }
+      res.status(200);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Length", fileLength.toString());
+      res.setHeader("Accept-Ranges", "bytes");
+      res.setHeader("Cache-Control", "private, max-age=300");
+      const stream = bucket.openDownloadStream(objectId);
+      stream.on("error", () => {
+        if (!res.headersSent) {
+          res.status(500).end();
+        }
+      });
+      stream.pipe(res);
+      return true;
+    };
+  }
+});
+
+// backend/src/routes/recording.routes.ts
+import { Router as Router5 } from "express";
+import multer2 from "multer";
+import mongoose5 from "mongoose";
+var MAX_RECORDING_SIZE_BYTES, upload2, router6, recording_routes_default;
+var init_recording_routes = __esm({
+  "backend/src/routes/recording.routes.ts"() {
+    "use strict";
+    init_auth_middleware();
+    init_rateLimit_middleware();
+    init_interviewSession();
+    init_recordingStore();
+    MAX_RECORDING_SIZE_BYTES = Number.parseInt(
+      process.env.MAX_RECORDING_FILE_SIZE_BYTES ?? `${25 * 1024 * 1024}`,
+      10
+    );
+    upload2 = multer2({
+      storage: multer2.memoryStorage(),
+      limits: {
+        fileSize: Number.isFinite(MAX_RECORDING_SIZE_BYTES) ? MAX_RECORDING_SIZE_BYTES : 25 * 1024 * 1024
+      },
+      fileFilter: (_req, file, cb) => {
+        const mime = file.mimetype ?? "";
+        const ext = file.originalname?.toLowerCase() ?? "";
+        const isVideo = mime.startsWith("video/") || ext.endsWith(".webm") || ext.endsWith(".mp4") || ext.endsWith(".ogg");
+        if (!isVideo) {
+          cb(new Error("Only video recording files are supported"));
+          return;
+        }
+        cb(null, true);
+      }
+    });
+    router6 = Router5();
+    router6.get("/:fileId", authMiddleware, async (req, res) => {
+      try {
+        const user = req.user;
+        const { fileId } = req.params;
+        if (!mongoose5.isValidObjectId(fileId)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid recording identifier"
+          });
+        }
+        const fileDoc = await getRecordingFileById(fileId);
+        const ownerId = fileDoc?.metadata?.userId;
+        if (!fileDoc || !ownerId || ownerId !== user._id) {
+          return res.status(404).json({
+            success: false,
+            message: "Recording not found"
+          });
+        }
+        const streamed = await streamRecordingFile({
+          fileId,
+          rangeHeader: req.headers.range,
+          res
+        });
+        if (!streamed) {
+          return res.status(404).json({
+            success: false,
+            message: "Recording not found"
+          });
+        }
+        return void 0;
+      } catch {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to stream recording"
+        });
+      }
+    });
+    router6.post(
+      "/",
+      authMiddleware,
+      recordingRateLimit,
+      (req, res, next) => {
+        upload2.single("recording")(req, res, (error) => {
+          if (!error) {
+            next();
+            return;
+          }
+          const maybeMulterError = error;
+          if (maybeMulterError.code === "LIMIT_FILE_SIZE") {
+            res.status(413).json({
+              success: false,
+              message: "Recording file is too large"
+            });
+            return;
+          }
+          res.status(400).json({
+            success: false,
+            message: error.message || "Invalid recording upload"
+          });
+        });
+      },
+      async (req, res) => {
+        try {
+          const user = req.user;
+          const typedReq = req;
+          const { sessionId } = req.body;
+          if (!typedReq.file) {
+            return res.status(400).json({
+              success: false,
+              message: "No recording uploaded"
+            });
+          }
+          if (!sessionId || !mongoose5.isValidObjectId(sessionId)) {
+            return res.status(400).json({
+              success: false,
+              message: "Valid sessionId is required"
+            });
+          }
+          const session = await interviewSession_default.findOne({
+            _id: sessionId,
+            userId: user._id
+          });
+          if (!session || session.questions.length === 0) {
+            return res.status(404).json({
+              success: false,
+              message: "Session not found for recording upload"
+            });
+          }
+          const targetIndex = session.questions.length - 1;
+          const existingRecordingId = session.questions[targetIndex].recordingFileId;
+          const saved = await saveRecordingFile({
+            buffer: typedReq.file.buffer,
+            mimeType: typedReq.file.mimetype || "video/webm",
+            filename: typedReq.file.originalname || `recording-${Date.now()}.webm`,
+            metadata: {
+              userId: user._id,
+              sessionId,
+              questionIndex: targetIndex
+            }
+          });
+          session.questions[targetIndex].recordingFileId = saved.fileId;
+          session.questions[targetIndex].recordingMimeType = saved.mimeType;
+          session.questions[targetIndex].recordingSizeBytes = saved.sizeBytes;
+          session.lastActivityAt = /* @__PURE__ */ new Date();
+          await session.save();
+          if (typeof existingRecordingId === "string" && existingRecordingId && existingRecordingId !== saved.fileId) {
+            await deleteRecordingFile(existingRecordingId);
+          }
+          return res.json({
+            success: true,
+            recording: {
+              fileId: saved.fileId,
+              mimeType: saved.mimeType,
+              sizeBytes: saved.sizeBytes,
+              streamUrl: `/api/interview/recording/${saved.fileId}`
+            }
+          });
+        } catch {
+          return res.status(500).json({
+            success: false,
+            message: "Failed to upload recording"
+          });
+        }
+      }
+    );
+    recording_routes_default = router6;
+  }
+});
+
+// backend/src/lib/db.ts
+import mongoose6 from "mongoose";
 async function dbConnect() {
   if (cached?.conn) {
     return cached.conn;
@@ -1799,7 +2076,7 @@ async function dbConnect() {
       serverSelectionTimeoutMS: 5e3,
       socketTimeoutMS: 1e4
     };
-    cached.promise = mongoose4.connect(mongoUri, opts).then((mongooseInstance) => {
+    cached.promise = mongoose6.connect(mongoUri, opts).then((mongooseInstance) => {
       return mongooseInstance;
     });
   }
@@ -1837,7 +2114,7 @@ import path from "path";
 import express2 from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import mongoose5 from "mongoose";
+import mongoose7 from "mongoose";
 import { fileURLToPath } from "url";
 var env, app, isProduction3, defaultDevOrigins, allowedOrigins, __filename, __dirname, frontendCandidates, frontendPath, normalizeHost, getOriginHost, isOriginAllowed, baseCorsOptions, corsDelegate, buildHealthPayload, healthHandler, readinessHandler, requireDb, app_default;
 var init_app = __esm({
@@ -1848,6 +2125,7 @@ var init_app = __esm({
     init_auth_routes();
     init_history_routes();
     init_resume_routes();
+    init_recording_routes();
     init_db();
     init_csrf_middleware();
     init_env();
@@ -1924,7 +2202,7 @@ var init_app = __esm({
     buildHealthPayload = () => ({
       uptime: Math.round(process.uptime()),
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      dbState: mongoose5.connection.readyState
+      dbState: mongoose7.connection.readyState
     });
     healthHandler = (_req, res) => {
       res.status(200).json({
@@ -1972,6 +2250,7 @@ var init_app = __esm({
     app.use("/api/auth", auth_routes_default);
     app.use("/api/interview", interview_routes_default);
     app.use("/api/interview/feedback", feedback_routes_default);
+    app.use("/api/interview/recording", recording_routes_default);
     app.use("/api/history", history_routes_default);
     app.use("/api/resume", resume_routes_default);
     app.use("/api", (_req, res) => {

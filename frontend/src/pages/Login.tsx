@@ -11,6 +11,7 @@ export default function Login() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
@@ -57,9 +58,10 @@ export default function Login() {
       <div className="auth-card">
         <div className="auth-title">
           <h1>Welcome Back</h1>
-          <p style={{ color: "var(--slate-500)", marginTop: "0.5rem" }}>
+          <p className="auth-subtitle">
             Sign in to continue your interview practice
           </p>
+          <p className="auth-highlights">Secure sessions, CSRF protection, and private history tracking.</p>
         </div>
 
         {hasGoogleClientId && (
@@ -90,14 +92,23 @@ export default function Login() {
             <label className="form-label" htmlFor="password">
               Password
             </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter your password"
-              required
-            />
+            <div className="password-field-wrap">
+              <input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Enter your password"
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((prev) => !prev)}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
           </div>
 
           {err && <div className="error-message">{err}</div>}

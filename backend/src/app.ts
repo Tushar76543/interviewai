@@ -11,6 +11,7 @@ import feedbackRoutes from "./routes/feedback.routes.js";
 import authRoutes from "./routes/auth.routes.js";
 import historyRoutes from "./routes/history.routes.js";
 import resumeRoutes from "./routes/resume.routes.js";
+import recordingRoutes from "./routes/recording.routes.js";
 import dbConnect from "./lib/db.js";
 import { csrfCookieMiddleware, requireCsrfProtection } from "./middleware/csrf.middleware.js";
 import { getEnvConfig } from "./config/env.js";
@@ -164,6 +165,7 @@ app.use("/api/resume", requireDb);
 app.use("/api/auth", authRoutes);
 app.use("/api/interview", interviewRoutes);
 app.use("/api/interview/feedback", feedbackRoutes);
+app.use("/api/interview/recording", recordingRoutes);
 app.use("/api/history", historyRoutes);
 app.use("/api/resume", resumeRoutes);
 

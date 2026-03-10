@@ -11,6 +11,9 @@ interface QAEntry {
   speechTranscript?: string;
   answerDurationSec?: number;
   cameraSnapshot?: string;
+  recordingFileId?: string;
+  recordingMimeType?: string;
+  recordingSizeBytes?: number;
   feedback?: {
     technical: number;
     clarity: number;
@@ -157,6 +160,21 @@ export default function History() {
                                 <div className="history-camera-preview">
                                   <strong>Camera snapshot:</strong>
                                   <img src={entry.cameraSnapshot} alt={`Camera snapshot for question ${index + 1}`} />
+                                </div>
+                              )}
+                              {entry.recordingFileId && (
+                                <div className="history-video-preview">
+                                  <strong>Recorded video:</strong>
+                                  <video
+                                    controls
+                                    preload="metadata"
+                                    src={`/api/interview/recording/${entry.recordingFileId}`}
+                                  />
+                                  {typeof entry.recordingSizeBytes === "number" && (
+                                    <span>
+                                      Size: {(entry.recordingSizeBytes / (1024 * 1024)).toFixed(2)} MB
+                                    </span>
+                                  )}
                                 </div>
                               )}
                             </div>

@@ -77,3 +77,10 @@ export const resumeRateLimit = createRateLimiter({
   max: 10,
   message: "Too many resume upload attempts. Please wait and try again.",
 });
+
+export const recordingRateLimit = createRateLimiter({
+  bucket: "rl:recording",
+  windowMs: 60 * 1000,
+  max: 12,
+  message: "Too many recording uploads. Please slow down.",
+});

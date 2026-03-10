@@ -12,6 +12,7 @@ export default function Signup() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
@@ -57,9 +58,10 @@ export default function Signup() {
       <div className="auth-card">
         <div className="auth-title">
           <h1>Create Account</h1>
-          <p style={{ color: "var(--slate-500)", marginTop: "0.5rem" }}>
+          <p className="auth-subtitle">
             Start practicing interviews with AI
           </p>
+          <p className="auth-highlights">Modern auth flow with Google sign-in and secure session cookies.</p>
         </div>
 
         {hasGoogleClientId && (
@@ -104,15 +106,24 @@ export default function Signup() {
             <label className="form-label" htmlFor="password">
               Password
             </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="Min 8 chars, 1 letter, 1 number"
-              required
-              minLength={8}
-            />
+            <div className="password-field-wrap">
+              <input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="Min 8 chars, 1 letter, 1 number"
+                required
+                minLength={8}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((prev) => !prev)}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
             <span className="form-hint">At least 8 characters, one letter, and one number</span>
           </div>
 

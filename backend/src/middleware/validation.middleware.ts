@@ -6,6 +6,8 @@ const ROLE_MAX_LENGTH = 80;
 const CATEGORY_MAX_LENGTH = 60;
 const QUESTION_MAX_LENGTH = 1000;
 const ANSWER_MAX_LENGTH = 5000;
+const TRANSCRIPT_MAX_LENGTH = 5000;
+const CAMERA_SNAPSHOT_MAX_LENGTH = 450000;
 
 export const signupValidation = [
   body("name")
@@ -25,6 +27,13 @@ export const signupValidation = [
 export const loginValidation = [
   body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
   body("password").isString().notEmpty().withMessage("Password is required"),
+];
+
+export const googleAuthValidation = [
+  body("credential")
+    .trim()
+    .isLength({ min: 20, max: 4096 })
+    .withMessage("A valid Google credential is required"),
 ];
 
 export const interviewStartValidation = [
@@ -95,6 +104,23 @@ export const feedbackValidation = [
     .trim()
     .isLength({ min: 2, max: 240 })
     .withMessage("Each expected point must be between 2 and 240 characters"),
+  body("speechTranscript")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ max: TRANSCRIPT_MAX_LENGTH })
+    .withMessage(`speechTranscript can be at most ${TRANSCRIPT_MAX_LENGTH} characters`),
+  body("answerDurationSec")
+    .optional()
+    .isInt({ min: 0, max: 7200 })
+    .withMessage("answerDurationSec must be between 0 and 7200 seconds"),
+  body("cameraSnapshot")
+    .optional()
+    .isString()
+    .isLength({ max: CAMERA_SNAPSHOT_MAX_LENGTH })
+    .withMessage(`cameraSnapshot is too large (max ${CAMERA_SNAPSHOT_MAX_LENGTH} chars)`)
+    .matches(/^data:image\/(jpeg|jpg|png);base64,/i)
+    .withMessage("cameraSnapshot must be a base64 encoded image data URL"),
   body("sessionId")
     .optional()
     .isMongoId()

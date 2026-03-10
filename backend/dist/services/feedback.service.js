@@ -1,7 +1,7 @@
 import axios from "axios";
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct:free";
-const REQUEST_TIMEOUT_MS = 10000;
+const REQUEST_TIMEOUT_MS = 7000;
 const RESPONSE_MAX_TOKENS = 450;
 const STOP_WORDS = new Set([
     "the",

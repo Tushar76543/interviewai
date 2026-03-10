@@ -1,4 +1,4 @@
-﻿import { Request, Response, CookieOptions } from "express";
+import { Request, Response, CookieOptions } from "express";
 import { AuthService } from "../services/auth.service.js";
 
 const isProduction = process.env.NODE_ENV === "production";
@@ -56,6 +56,28 @@ export class AuthController {
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Login failed";
+      return res.status(400).json({
+        success: false,
+        message,
+      });
+    }
+  }
+
+  static async googleLogin(req: Request, res: Response) {
+    try {
+      const { credential } = req.body;
+      const token = await AuthService.loginWithGoogle(credential);
+      const user = await AuthService.getUserFromToken(token);
+
+      res.cookie("token", token, COOKIE_OPTIONS);
+
+      return res.json({
+        success: true,
+        message: "Google login successful",
+        user,
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Google login failed";
       return res.status(400).json({
         success: false,
         message,

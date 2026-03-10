@@ -1,7 +1,8 @@
-﻿import { useState } from "react";
-import { signup } from "../api/auth";
+import { useCallback, useState } from "react";
+import { signup, googleLogin } from "../api/auth";
 import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 import "../App.css";
 
 export default function Signup() {
@@ -13,9 +14,10 @@ export default function Signup() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
     setErr("");
 
@@ -31,15 +33,43 @@ export default function Signup() {
     navigate("/dashboard");
   };
 
+  const handleGoogleSuccess = useCallback(
+    async (credential: string) => {
+      setLoading(true);
+      setErr("");
+
+      const res = await googleLogin(credential);
+      if (res.error || res.success === false) {
+        setErr(res.message || "Google sign-up failed");
+        setLoading(false);
+        return;
+      }
+
+      setUser(res.user);
+      setLoading(false);
+      navigate("/dashboard");
+    },
+    [navigate, setUser]
+  );
+
   return (
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-title">
           <h1>Create Account</h1>
-          <p style={{ color: "var(--light-300)", marginTop: "0.5rem" }}>
+          <p style={{ color: "var(--slate-500)", marginTop: "0.5rem" }}>
             Start practicing interviews with AI
           </p>
         </div>
+
+        {hasGoogleClientId && (
+          <>
+            <GoogleSignInButton onSuccess={handleGoogleSuccess} disabled={loading} text="signup_with" />
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+          </>
+        )}
 
         <form onSubmit={submit} className="auth-form">
           <div className="form-group">
@@ -50,7 +80,7 @@ export default function Signup() {
               id="name"
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              onChange={(event) => setName(event.target.value)}
               placeholder="John Doe"
               required
             />
@@ -64,7 +94,7 @@ export default function Signup() {
               id="email"
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(event) => setEmail(event.target.value)}
               placeholder="you@example.com"
               required
             />
@@ -78,14 +108,12 @@ export default function Signup() {
               id="password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               placeholder="Min 8 chars, 1 letter, 1 number"
               required
               minLength={8}
             />
-            <span className="form-hint">
-              At least 8 characters, one letter, and one number
-            </span>
+            <span className="form-hint">At least 8 characters, one letter, and one number</span>
           </div>
 
           {err && <div className="error-message">{err}</div>}
@@ -96,8 +124,7 @@ export default function Signup() {
         </form>
 
         <div className="auth-footer">
-          Already have an account?{" "}
-          <Link to="/login">Sign in here</Link>
+          Already have an account? <Link to="/login">Sign in here</Link>
         </div>
       </div>
     </div>

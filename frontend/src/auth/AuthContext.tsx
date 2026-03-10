@@ -7,6 +7,8 @@ interface User {
   name: string;
   email: string;
   role?: string;
+  authProvider?: "local" | "google";
+  avatarUrl?: string;
   createdAt?: string;
 }
 

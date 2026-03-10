@@ -1,8 +1,9 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { AuthController } from "../controllers/auth.controller.js";
 import {
   signupValidation,
   loginValidation,
+  googleAuthValidation,
   handleValidationErrors,
 } from "../middleware/validation.middleware.js";
 import { authRateLimit } from "../middleware/rateLimit.middleware.js";
@@ -26,6 +27,14 @@ router.post(
   loginValidation,
   handleValidationErrors,
   AuthController.login
+);
+
+router.post(
+  "/google",
+  authRateLimit,
+  googleAuthValidation,
+  handleValidationErrors,
+  AuthController.googleLogin
 );
 
 router.get("/me", AuthController.getMe);

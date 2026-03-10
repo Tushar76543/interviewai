@@ -1,7 +1,8 @@
-﻿import { useState } from "react";
-import { login } from "../api/auth";
+import { useCallback, useState } from "react";
+import { login, googleLogin } from "../api/auth";
 import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
+import GoogleSignInButton from "../components/GoogleSignInButton";
 import "../App.css";
 
 export default function Login() {
@@ -12,9 +13,10 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
+  const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setLoading(true);
     setErr("");
 
@@ -27,20 +29,47 @@ export default function Login() {
     }
 
     setUser(res.user);
-
     setLoading(false);
     navigate("/dashboard");
   };
+
+  const handleGoogleSuccess = useCallback(
+    async (credential: string) => {
+      setLoading(true);
+      setErr("");
+
+      const res = await googleLogin(credential);
+      if (res.error || res.success === false) {
+        setErr(res.message || "Google sign-in failed");
+        setLoading(false);
+        return;
+      }
+
+      setUser(res.user);
+      setLoading(false);
+      navigate("/dashboard");
+    },
+    [navigate, setUser]
+  );
 
   return (
     <div className="auth-container">
       <div className="auth-card">
         <div className="auth-title">
           <h1>Welcome Back</h1>
-          <p style={{ color: "var(--light-300)", marginTop: "0.5rem" }}>
+          <p style={{ color: "var(--slate-500)", marginTop: "0.5rem" }}>
             Sign in to continue your interview practice
           </p>
         </div>
+
+        {hasGoogleClientId && (
+          <>
+            <GoogleSignInButton onSuccess={handleGoogleSuccess} disabled={loading} text="continue_with" />
+            <div className="auth-divider">
+              <span>or</span>
+            </div>
+          </>
+        )}
 
         <form onSubmit={submit} className="auth-form">
           <div className="form-group">
@@ -51,7 +80,7 @@ export default function Login() {
               id="email"
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(event) => setEmail(event.target.value)}
               placeholder="you@example.com"
               required
             />
@@ -65,7 +94,7 @@ export default function Login() {
               id="password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               placeholder="Enter your password"
               required
             />
@@ -79,8 +108,7 @@ export default function Login() {
         </form>
 
         <div className="auth-footer">
-          Don't have an account?{" "}
-          <Link to="/signup">Create one here</Link>
+          Don't have an account? <Link to="/signup">Create one here</Link>
         </div>
       </div>
     </div>

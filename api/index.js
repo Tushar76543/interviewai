@@ -147,7 +147,7 @@ var init_openai_service = __esm({
     };
     OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
     DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct:free";
-    REQUEST_TIMEOUT_MS = 1e4;
+    REQUEST_TIMEOUT_MS = 7e3;
     RESPONSE_MAX_TOKENS = 320;
     MIXED_CATEGORY = "Mixed";
     SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"];
@@ -340,7 +340,21 @@ var init_user = __esm({
           trim: true,
           index: true
         },
-        passwordHash: { type: String, required: true },
+        passwordHash: { type: String },
+        authProvider: {
+          type: String,
+          enum: ["local", "google"],
+          default: "local",
+          required: true
+        },
+        googleId: {
+          type: String,
+          trim: true,
+          unique: true,
+          sparse: true,
+          index: true
+        },
+        avatarUrl: { type: String, trim: true },
         rolePreferences: { type: [String], default: [] },
         interviewHistory: { type: [String], default: [] }
       },
@@ -349,6 +363,9 @@ var init_user = __esm({
     UserSchema.pre("save", function normalizeUser(next) {
       if (this.email) {
         this.email = this.email.toLowerCase().trim();
+      }
+      if (this.googleId) {
+        this.googleId = this.googleId.trim();
       }
       next();
     });
@@ -403,6 +420,9 @@ var init_interviewSession = __esm({
         question: { type: String, required: true },
         answer: { type: String, default: "" },
         category: { type: String },
+        speechTranscript: { type: String, maxlength: 5e3 },
+        answerDurationSec: { type: Number, min: 0, max: 7200 },
+        cameraSnapshot: { type: String, maxlength: 45e4 },
         feedback: {
           technical: Number,
           clarity: Number,
@@ -444,7 +464,7 @@ function handleValidationErrors(req, res, next) {
   }
   next();
 }
-var ROLE_MIN_LENGTH, ROLE_MAX_LENGTH, CATEGORY_MAX_LENGTH, QUESTION_MAX_LENGTH, ANSWER_MAX_LENGTH, signupValidation, loginValidation, interviewStartValidation, feedbackValidation;
+var ROLE_MIN_LENGTH, ROLE_MAX_LENGTH, CATEGORY_MAX_LENGTH, QUESTION_MAX_LENGTH, ANSWER_MAX_LENGTH, TRANSCRIPT_MAX_LENGTH, CAMERA_SNAPSHOT_MAX_LENGTH, signupValidation, loginValidation, googleAuthValidation, interviewStartValidation, feedbackValidation;
 var init_validation_middleware = __esm({
   "backend/src/middleware/validation.middleware.ts"() {
     "use strict";
@@ -453,6 +473,8 @@ var init_validation_middleware = __esm({
     CATEGORY_MAX_LENGTH = 60;
     QUESTION_MAX_LENGTH = 1e3;
     ANSWER_MAX_LENGTH = 5e3;
+    TRANSCRIPT_MAX_LENGTH = 5e3;
+    CAMERA_SNAPSHOT_MAX_LENGTH = 45e4;
     signupValidation = [
       body("name").trim().isLength({ min: 2, max: 60 }).withMessage("Name must be between 2 and 60 characters"),
       body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
@@ -461,6 +483,9 @@ var init_validation_middleware = __esm({
     loginValidation = [
       body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
       body("password").isString().notEmpty().withMessage("Password is required")
+    ];
+    googleAuthValidation = [
+      body("credential").trim().isLength({ min: 20, max: 4096 }).withMessage("A valid Google credential is required")
     ];
     interviewStartValidation = [
       body("role").optional().isString().trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
@@ -478,6 +503,9 @@ var init_validation_middleware = __esm({
       body("answer").trim().isLength({ min: 1, max: ANSWER_MAX_LENGTH }).withMessage(`Answer must be between 1 and ${ANSWER_MAX_LENGTH} characters`),
       body("expectedPoints").optional().isArray({ max: 8 }).withMessage("expectedPoints can contain at most 8 items"),
       body("expectedPoints.*").optional().isString().trim().isLength({ min: 2, max: 240 }).withMessage("Each expected point must be between 2 and 240 characters"),
+      body("speechTranscript").optional().isString().trim().isLength({ max: TRANSCRIPT_MAX_LENGTH }).withMessage(`speechTranscript can be at most ${TRANSCRIPT_MAX_LENGTH} characters`),
+      body("answerDurationSec").optional().isInt({ min: 0, max: 7200 }).withMessage("answerDurationSec must be between 0 and 7200 seconds"),
+      body("cameraSnapshot").optional().isString().isLength({ max: CAMERA_SNAPSHOT_MAX_LENGTH }).withMessage(`cameraSnapshot is too large (max ${CAMERA_SNAPSHOT_MAX_LENGTH} chars)`).matches(/^data:image\/(jpeg|jpg|png);base64,/i).withMessage("cameraSnapshot must be a base64 encoded image data URL"),
       body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
     ];
   }
@@ -949,7 +977,7 @@ var init_feedback_service = __esm({
     "use strict";
     OPENROUTER_ENDPOINT2 = "https://openrouter.ai/api/v1/chat/completions";
     DEFAULT_MODEL2 = "meta-llama/llama-3.1-8b-instruct:free";
-    REQUEST_TIMEOUT_MS2 = 1e4;
+    REQUEST_TIMEOUT_MS2 = 7e3;
     RESPONSE_MAX_TOKENS2 = 450;
     STOP_WORDS = /* @__PURE__ */ new Set([
       "the",
@@ -1201,7 +1229,16 @@ var init_feedback_routes = __esm({
       async (req, res) => {
         try {
           const user = req.user;
-          const { role, question, answer, expectedPoints, sessionId } = req.body;
+          const {
+            role,
+            question,
+            answer,
+            expectedPoints,
+            speechTranscript,
+            answerDurationSec,
+            cameraSnapshot,
+            sessionId
+          } = req.body;
           const result = await generateFeedback(
             role,
             question,
@@ -1217,6 +1254,15 @@ var init_feedback_routes = __esm({
               const lastIdx = session.questions.length - 1;
               session.questions[lastIdx].answer = answer;
               session.questions[lastIdx].feedback = result.feedback;
+              if (typeof speechTranscript === "string" && speechTranscript.trim()) {
+                session.questions[lastIdx].speechTranscript = speechTranscript.trim().slice(0, 5e3);
+              }
+              if (typeof answerDurationSec === "number" && Number.isFinite(answerDurationSec)) {
+                session.questions[lastIdx].answerDurationSec = Math.max(0, Math.min(7200, Math.round(answerDurationSec)));
+              }
+              if (typeof cameraSnapshot === "string" && cameraSnapshot.startsWith("data:image/")) {
+                session.questions[lastIdx].cameraSnapshot = cameraSnapshot.slice(0, 45e4);
+              }
               if (result.followUp?.prompt) {
                 const followUpCategory = session.questions[lastIdx].category;
                 session.questions.push({
@@ -1243,26 +1289,39 @@ var init_feedback_routes = __esm({
 });
 
 // backend/src/services/auth.service.ts
+import axios3 from "axios";
 import bcrypt from "bcryptjs";
 import jwt2 from "jsonwebtoken";
-var SALT_ROUNDS, TOKEN_TTL, normalizeEmail, AuthService;
+var SALT_ROUNDS, TOKEN_TTL, GOOGLE_TOKENINFO_ENDPOINT, GOOGLE_VERIFY_TIMEOUT_MS, normalizeEmail, isEmailVerified, AuthService;
 var init_auth_service = __esm({
   "backend/src/services/auth.service.ts"() {
     "use strict";
     init_user();
     SALT_ROUNDS = 12;
     TOKEN_TTL = "7d";
+    GOOGLE_TOKENINFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo";
+    GOOGLE_VERIFY_TIMEOUT_MS = 7e3;
     normalizeEmail = (email) => email.trim().toLowerCase();
+    isEmailVerified = (value) => {
+      if (typeof value === "boolean") return value;
+      return typeof value === "string" && value.toLowerCase() === "true";
+    };
     AuthService = class {
       static async signup(name, email, password) {
         const normalizedEmail = normalizeEmail(email);
         const exists = await user_default.findOne({ email: normalizedEmail });
-        if (exists) throw new Error("User already exists");
+        if (exists) {
+          if (!exists.passwordHash && exists.googleId) {
+            throw new Error("Account already exists with Google sign-in. Please continue with Google.");
+          }
+          throw new Error("User already exists");
+        }
         const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
         const user = await user_default.create({
           name: name.trim(),
           email: normalizedEmail,
-          passwordHash
+          passwordHash,
+          authProvider: "local"
         });
         return this.generateToken(user._id.toString());
       }
@@ -1270,9 +1329,65 @@ var init_auth_service = __esm({
         const normalizedEmail = normalizeEmail(email);
         const user = await user_default.findOne({ email: normalizedEmail });
         if (!user) throw new Error("Invalid email or password");
+        if (!user.passwordHash) {
+          throw new Error("This account uses Google sign-in. Continue with Google.");
+        }
         const match = await bcrypt.compare(password, user.passwordHash);
         if (!match) throw new Error("Invalid email or password");
         return this.generateToken(user._id.toString());
+      }
+      static async loginWithGoogle(credential) {
+        const idToken = credential.trim();
+        if (!idToken) {
+          throw new Error("Google credential is required");
+        }
+        const profile = await this.verifyGoogleToken(idToken);
+        const normalizedEmail = normalizeEmail(profile.email);
+        let user = await user_default.findOne({
+          $or: [{ googleId: profile.sub }, { email: normalizedEmail }]
+        });
+        if (!user) {
+          user = await user_default.create({
+            name: profile.name?.trim() || normalizedEmail.split("@")[0],
+            email: normalizedEmail,
+            authProvider: "google",
+            googleId: profile.sub,
+            avatarUrl: profile.picture
+          });
+        } else {
+          user.googleId = profile.sub;
+          user.avatarUrl = profile.picture || user.avatarUrl;
+          if (!user.name && profile.name) {
+            user.name = profile.name.trim();
+          }
+          if (!user.passwordHash) {
+            user.authProvider = "google";
+          }
+          await user.save();
+        }
+        return this.generateToken(user._id.toString());
+      }
+      static async verifyGoogleToken(idToken) {
+        try {
+          const response = await axios3.get(GOOGLE_TOKENINFO_ENDPOINT, {
+            params: { id_token: idToken },
+            timeout: GOOGLE_VERIFY_TIMEOUT_MS
+          });
+          const payload = response.data;
+          const allowedIssuer = payload.iss === "accounts.google.com" || payload.iss === "https://accounts.google.com";
+          const expectedAudience = (process.env.GOOGLE_CLIENT_ID ?? "").trim();
+          const audienceMatches = !expectedAudience || payload.aud === expectedAudience;
+          if (!allowedIssuer || !audienceMatches || !payload.sub || !payload.email || !isEmailVerified(payload.email_verified)) {
+            throw new Error("Google token validation failed");
+          }
+          return {
+            ...payload,
+            sub: payload.sub,
+            email: payload.email
+          };
+        } catch {
+          throw new Error("Google authentication failed");
+        }
       }
       static generateToken(id) {
         const secret = process.env.JWT_SECRET;
@@ -1349,6 +1464,25 @@ var init_auth_controller = __esm({
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : "Login failed";
+          return res.status(400).json({
+            success: false,
+            message
+          });
+        }
+      }
+      static async googleLogin(req, res) {
+        try {
+          const { credential } = req.body;
+          const token = await AuthService.loginWithGoogle(credential);
+          const user = await AuthService.getUserFromToken(token);
+          res.cookie("token", token, COOKIE_OPTIONS);
+          return res.json({
+            success: true,
+            message: "Google login successful",
+            user
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Google login failed";
           return res.status(400).json({
             success: false,
             message
@@ -1469,6 +1603,13 @@ var init_auth_routes = __esm({
       loginValidation,
       handleValidationErrors,
       AuthController.login
+    );
+    router3.post(
+      "/google",
+      authRateLimit,
+      googleAuthValidation,
+      handleValidationErrors,
+      AuthController.googleLogin
     );
     router3.get("/me", AuthController.getMe);
     router3.post("/logout", AuthController.logout);

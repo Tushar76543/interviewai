@@ -4,6 +4,9 @@ export interface IQAEntry {
   question: string;
   answer: string;
   category?: string;
+  speechTranscript?: string;
+  answerDurationSec?: number;
+  cameraSnapshot?: string;
   feedback?: {
     technical: number;
     clarity: number;
@@ -29,6 +32,9 @@ const QAEntrySchema = new Schema<IQAEntry>(
     question: { type: String, required: true },
     answer: { type: String, default: "" },
     category: { type: String },
+    speechTranscript: { type: String, maxlength: 5000 },
+    answerDurationSec: { type: Number, min: 0, max: 7200 },
+    cameraSnapshot: { type: String, maxlength: 450000 },
     feedback: {
       technical: Number,
       clarity: Number,

@@ -19,7 +19,16 @@ router.post(
   async (req, res) => {
     try {
       const user = (req as express.Request & { user: { _id: string } }).user;
-      const { role, question, answer, expectedPoints, sessionId } = req.body;
+      const {
+        role,
+        question,
+        answer,
+        expectedPoints,
+        speechTranscript,
+        answerDurationSec,
+        cameraSnapshot,
+        sessionId,
+      } = req.body;
 
       const result = await generateFeedback(
         role,
@@ -38,6 +47,18 @@ router.post(
           const lastIdx = session.questions.length - 1;
           session.questions[lastIdx].answer = answer;
           session.questions[lastIdx].feedback = result.feedback;
+
+          if (typeof speechTranscript === "string" && speechTranscript.trim()) {
+            session.questions[lastIdx].speechTranscript = speechTranscript.trim().slice(0, 5000);
+          }
+
+          if (typeof answerDurationSec === "number" && Number.isFinite(answerDurationSec)) {
+            session.questions[lastIdx].answerDurationSec = Math.max(0, Math.min(7200, Math.round(answerDurationSec)));
+          }
+
+          if (typeof cameraSnapshot === "string" && cameraSnapshot.startsWith("data:image/")) {
+            session.questions[lastIdx].cameraSnapshot = cameraSnapshot.slice(0, 450000);
+          }
 
           if (result.followUp?.prompt) {
             const followUpCategory = session.questions[lastIdx].category;

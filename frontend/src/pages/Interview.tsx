@@ -55,6 +55,12 @@ const CATEGORY_OPTIONS = [
   "Leadership and Ownership",
 ];
 
+const SPEECH_LANGUAGE_OPTIONS = [
+  { value: "en-US", label: "English (US)" },
+  { value: "en-IN", label: "English (India)" },
+  { value: "en-GB", label: "English (UK)" },
+];
+
 const MIN_RECOMMENDED_WORDS = 40;
 
 const getWordCount = (text: string) => {
@@ -93,6 +99,9 @@ const mergeDictationText = (currentAnswer: string, spokenText: string) => {
 
   return `${trimmedCurrent}\n${trimmedSpoken}`;
 };
+
+const cleanTranscriptText = (value: string) =>
+  value.replace(/\s+/g, " ").replace(/\s+([,.!?])/g, "$1").trim();
 
 const buildGuidedTemplate = (category: string, isTechnicalRole: boolean) => {
   const lowerCategory = category.toLowerCase();
@@ -142,6 +151,11 @@ function Interview() {
   const [templateNotice, setTemplateNotice] = useState("");
   const [liveTranscript, setLiveTranscript] = useState("");
   const [voiceError, setVoiceError] = useState("");
+  const [voiceModeActive, setVoiceModeActive] = useState(false);
+  const [speechLanguage, setSpeechLanguage] = useState("en-US");
+  const [speechTranscriptLog, setSpeechTranscriptLog] = useState("");
+
+  const webcamRef = useRef<Webcam | null>(null);
 
   const isBusy = isGeneratingQuestion || isSubmittingAnswer;
   const isTechnicalRole = useMemo(
@@ -206,6 +220,22 @@ function Interview() {
   }, [combinedTranscript, listening]);
 
   useEffect(() => {
+    if (!voiceModeActive || listening || isBusy) return;
+
+    const retryId = window.setTimeout(() => {
+      void SpeechRecognition.startListening({
+        continuous: true,
+        interimResults: true,
+        language: speechLanguage,
+      }).catch(() => {
+        setVoiceError("Live transcription was interrupted. Please restart recording.");
+      });
+    }, 350);
+
+    return () => window.clearTimeout(retryId);
+  }, [voiceModeActive, listening, isBusy, speechLanguage]);
+
+  useEffect(() => {
     if (!question || !timerRunning) return;
 
     const intervalId = window.setInterval(() => {
@@ -227,6 +257,9 @@ function Interview() {
     setTemplateNotice("");
     setVoiceError("");
     setLiveTranscript("");
+    setSpeechTranscriptLog("");
+    setVoiceModeActive(false);
+    SpeechRecognition.stopListening();
     resetTranscript();
   }, [questionPrompt, resetTranscript]);
 
@@ -286,11 +319,13 @@ function Interview() {
     setTemplateNotice("");
     setVoiceError("");
     setLiveTranscript("");
+    setVoiceModeActive(false);
+    setSpeechTranscriptLog("");
     setElapsedSeconds(0);
     setLastAnswerDurationSec(null);
 
     try {
-      const res = await api.post("/interview/start", { role, difficulty, category });
+      const res = await api.post("/interview/start", { role, difficulty, category }, { timeout: 12000 });
       setQuestion(res.data.question);
       setHistory([res.data.question]);
       setSessionId(res.data.sessionId || null);
@@ -311,6 +346,8 @@ function Interview() {
     setTemplateNotice("");
     setVoiceError("");
     setLiveTranscript("");
+    setVoiceModeActive(false);
+    setSpeechTranscriptLog("");
     setLastAnswerDurationSec(null);
 
     try {
@@ -323,7 +360,7 @@ function Interview() {
           .map((item) => item.category)
           .filter((item): item is string => typeof item === "string" && item.length > 0),
         sessionId,
-      });
+      }, { timeout: 12000 });
       setQuestion(res.data.question);
       setHistory((prev) => [...prev, res.data.question]);
       setSessionId(res.data.sessionId || sessionId);
@@ -337,6 +374,19 @@ function Interview() {
       setIsGeneratingQuestion(false);
     }
   };
+
+  const captureCameraSnapshot = useCallback(() => {
+    if (!showCamera || !webcamRef.current) {
+      return "";
+    }
+
+    const shot = webcamRef.current.getScreenshot();
+    if (typeof shot !== "string" || !shot.startsWith("data:image/")) {
+      return "";
+    }
+
+    return shot;
+  }, [showCamera]);
 
   const submitAnswer = useCallback(async () => {
     if (!question) return;
@@ -358,6 +408,9 @@ function Interview() {
     setTemplateNotice("");
     setTimerRunning(false);
     setLastAnswerDurationSec(elapsedSeconds);
+    const speechTranscript = cleanTranscriptText(speechTranscriptLog || transcriptRef.current);
+    const answerDurationSec = Math.max(0, Math.round(elapsedSeconds));
+    const cameraSnapshot = captureCameraSnapshot();
 
     try {
       const res = await api.post("/interview/feedback", {
@@ -365,8 +418,11 @@ function Interview() {
         question: question.prompt,
         answer: trimmedAnswer,
         expectedPoints: question.expectedPoints || [],
+        speechTranscript: speechTranscript || undefined,
+        answerDurationSec,
+        cameraSnapshot: cameraSnapshot || undefined,
         sessionId,
-      });
+      }, { timeout: 12000 });
 
       const nextFeedback = res.data.feedback as Feedback;
       const overallFromScores = roundToOneDecimal(
@@ -402,7 +458,19 @@ function Interview() {
     } finally {
       setIsSubmittingAnswer(false);
     }
-  }, [answer, autoSpeak, category, elapsedSeconds, listening, question, role, sessionId, speak]);
+  }, [
+    answer,
+    autoSpeak,
+    captureCameraSnapshot,
+    category,
+    elapsedSeconds,
+    listening,
+    question,
+    role,
+    sessionId,
+    speak,
+    speechTranscriptLog,
+  ]);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -428,20 +496,24 @@ function Interview() {
     setTemplateNotice("");
     setError("");
     setLiveTranscript("");
+    setVoiceModeActive(true);
     resetTranscript();
 
     void SpeechRecognition.startListening({
       continuous: true,
-      language: "en-US",
+      interimResults: true,
+      language: speechLanguage,
     }).catch(() => {
+      setVoiceModeActive(false);
       setVoiceError("Could not start microphone. Please allow microphone access and retry.");
     });
   };
 
   const stopListening = () => {
+    setVoiceModeActive(false);
     SpeechRecognition.stopListening();
     window.setTimeout(() => {
-      const spokenText = transcriptRef.current.trim();
+      const spokenText = cleanTranscriptText(transcriptRef.current);
       if (!spokenText) {
         setTemplateNotice("No transcript captured. Try speaking closer to your microphone.");
         resetTranscript();
@@ -450,10 +522,11 @@ function Interview() {
       }
 
       setAnswer((prev) => mergeDictationText(prev, spokenText));
+      setSpeechTranscriptLog((prev) => mergeDictationText(prev, spokenText));
       setTemplateNotice("Voice transcript added to your answer.");
       setLiveTranscript("");
       resetTranscript();
-    }, 180);
+    }, 220);
   };
 
   const insertGuidedTemplate = () => {
@@ -605,6 +678,18 @@ function Interview() {
           )}
 
           <div className="voice-controls">
+            <select
+              value={speechLanguage}
+              onChange={(event) => setSpeechLanguage(event.target.value)}
+              className="voice-language-select"
+              disabled={listening}
+            >
+              {SPEECH_LANGUAGE_OPTIONS.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
             {!listening ? (
               <button
                 type="button"
@@ -620,6 +705,9 @@ function Interview() {
               </button>
             )}
             {listening && <span className="recording-status">Recording in progress...</span>}
+            {voiceModeActive && !listening && (
+              <span className="recording-status">Reconnecting microphone...</span>
+            )}
             {isMicrophoneAvailable === false && (
               <span className="recording-status">Microphone access is blocked in this browser.</span>
             )}
@@ -700,7 +788,15 @@ function Interview() {
                   border: "1px solid var(--primary-600)",
                 }}
               >
-                <Webcam audio={false} width="100%" height={250} screenshotFormat="image/jpeg" />
+                <Webcam
+                  ref={webcamRef}
+                  audio={false}
+                  width="100%"
+                  height={250}
+                  screenshotFormat="image/jpeg"
+                  screenshotQuality={0.6}
+                  videoConstraints={{ width: 640, height: 360, facingMode: "user" }}
+                />
               </div>
             )}
 

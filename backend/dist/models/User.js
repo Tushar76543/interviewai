@@ -9,13 +9,30 @@ const UserSchema = new Schema({
         trim: true,
         index: true,
     },
-    passwordHash: { type: String, required: true },
+    passwordHash: { type: String },
+    authProvider: {
+        type: String,
+        enum: ["local", "google"],
+        default: "local",
+        required: true,
+    },
+    googleId: {
+        type: String,
+        trim: true,
+        unique: true,
+        sparse: true,
+        index: true,
+    },
+    avatarUrl: { type: String, trim: true },
     rolePreferences: { type: [String], default: [] },
     interviewHistory: { type: [String], default: [] },
 }, { timestamps: true });
 UserSchema.pre("save", function normalizeUser(next) {
     if (this.email) {
         this.email = this.email.toLowerCase().trim();
+    }
+    if (this.googleId) {
+        this.googleId = this.googleId.trim();
     }
     next();
 });

@@ -32,6 +32,22 @@ export async function login(email: string, password: string) {
   return parseApiResponse(res);
 }
 
+export async function googleLogin(credential: string) {
+  await ensureCsrfToken();
+
+  const res = await fetch(`${apiBaseUrl}/auth/google`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...getCsrfHeaders(),
+    },
+    body: JSON.stringify({ credential }),
+  });
+
+  return parseApiResponse(res);
+}
+
 export async function signup(name: string, email: string, password: string) {
   await ensureCsrfToken();
 

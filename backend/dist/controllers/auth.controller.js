@@ -52,6 +52,26 @@ export class AuthController {
             });
         }
     }
+    static async googleLogin(req, res) {
+        try {
+            const { credential } = req.body;
+            const token = await AuthService.loginWithGoogle(credential);
+            const user = await AuthService.getUserFromToken(token);
+            res.cookie("token", token, COOKIE_OPTIONS);
+            return res.json({
+                success: true,
+                message: "Google login successful",
+                user,
+            });
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : "Google login failed";
+            return res.status(400).json({
+                success: false,
+                message,
+            });
+        }
+    }
     static async getMe(req, res) {
         try {
             const token = req.cookies?.token ||

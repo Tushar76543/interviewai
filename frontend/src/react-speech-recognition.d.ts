@@ -3,6 +3,7 @@ declare module 'react-speech-recognition' {
     export interface SpeechRecognitionOptions {
         continuous?: boolean;
         language?: string;
+        interimResults?: boolean;
     }
 
     export interface UseSpeechRecognitionHook {

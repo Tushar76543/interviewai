@@ -8,6 +8,9 @@ import { extractApiErrorMessage } from "../utils/http";
 interface QAEntry {
   question: string;
   answer: string;
+  speechTranscript?: string;
+  answerDurationSec?: number;
+  cameraSnapshot?: string;
   feedback?: {
     technical: number;
     clarity: number;
@@ -18,6 +21,12 @@ interface QAEntry {
     improvements?: string[];
   };
 }
+
+const formatDuration = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+};
 
 interface Session {
   _id: string;
@@ -130,6 +139,26 @@ export default function History() {
                           {entry.answer && (
                             <div className="history-a">
                               <strong>Your answer:</strong> {entry.answer}
+                            </div>
+                          )}
+                          {(typeof entry.answerDurationSec === "number" ||
+                            entry.speechTranscript ||
+                            entry.cameraSnapshot) && (
+                            <div className="history-capture-meta">
+                              {typeof entry.answerDurationSec === "number" && (
+                                <span>Recorded duration: {formatDuration(entry.answerDurationSec)}</span>
+                              )}
+                              {entry.speechTranscript && (
+                                <div className="history-transcript">
+                                  <strong>Speech transcript:</strong> {entry.speechTranscript}
+                                </div>
+                              )}
+                              {entry.cameraSnapshot && (
+                                <div className="history-camera-preview">
+                                  <strong>Camera snapshot:</strong>
+                                  <img src={entry.cameraSnapshot} alt={`Camera snapshot for question ${index + 1}`} />
+                                </div>
+                              )}
                             </div>
                           )}
                           {entry.feedback && (

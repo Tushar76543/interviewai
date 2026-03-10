@@ -53,25 +53,21 @@ Question requirements:
 ${previousPromptGuidance}
 ${previousCategoryGuidance}
 
-Set timeLimitSec by complexity:
-- Easy: 90 to 150
-- Medium: 120 to 210
-- FAANG: 180 to 300
-
 Return JSON only in this format:
-{"qid":"q1","category":"<category>","prompt":"<question>","expectedPoints":["point1","point2","point3"],"timeLimitSec":150}
+{"qid":"q1","category":"<category>","prompt":"<question>","expectedPoints":["point1","point2","point3"]}
 `;
   const referer = process.env.FRONTEND_URL?.startsWith("http") ? process.env.FRONTEND_URL : "https://interviewai.app";
   try {
     const response = await axios.post(
       OPENROUTER_ENDPOINT,
       {
-        model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
+        model: process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
         messages: [
           { role: "system", content: "You are an AI Interview Coach." },
           { role: "user", content: prompt }
         ],
-        temperature: 0.85
+        temperature: 0.5,
+        max_tokens: RESPONSE_MAX_TOKENS
       },
       {
         timeout: REQUEST_TIMEOUT_MS,
@@ -89,7 +85,12 @@ Return JSON only in this format:
     }
     const parsed = parseQuestion(text, resolvedCategory, resolvedDifficulty);
     if (!parsed) {
-      throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an invalid response format", 502);
+      return buildFallbackQuestion(
+        safeRole,
+        resolvedDifficulty,
+        resolvedCategory,
+        safePrevious.length
+      );
     }
     return parsed;
   } catch (error) {
@@ -109,19 +110,26 @@ Return JSON only in this format:
       if (status === 401 || status === 403) {
         throw new AiProviderError("AI_AUTH_FAILED", "AI API key rejected by provider", 502);
       }
-      if (status === 429) {
-        throw new AiProviderError("AI_RATE_LIMITED", "AI provider rate limit reached", 429);
-      }
-      if (error.code === "ECONNABORTED") {
-        throw new AiProviderError("AI_TIMEOUT", "AI provider request timed out", 504);
+      if (status === 429 || error.code === "ECONNABORTED" || !status || status >= 500) {
+        return buildFallbackQuestion(
+          safeRole,
+          resolvedDifficulty,
+          resolvedCategory,
+          safePrevious.length
+        );
       }
       throw new AiProviderError("AI_PROVIDER_ERROR", "AI provider request failed", 502);
     }
     console.error("Unexpected question generation error", error);
-    throw new AiProviderError("AI_PROVIDER_ERROR", "Failed to generate question", 500);
+    return buildFallbackQuestion(
+      safeRole,
+      resolvedDifficulty,
+      resolvedCategory,
+      safePrevious.length
+    );
   }
 }
-var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, MIXED_CATEGORY, SUPPORTED_DIFFICULTIES, cleanText, defaultTimeLimitByDifficulty, getCategoryPool, resolveCategory, extractJson, parseQuestion;
+var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, RESPONSE_MAX_TOKENS, MIXED_CATEGORY, SUPPORTED_DIFFICULTIES, cleanText, defaultTimeLimitByDifficulty, getCategoryPool, resolveCategory, extractJson, parseQuestion, categoryFallbacks, buildFallbackQuestion;
 var init_openai_service = __esm({
   "backend/src/services/openai.service.ts"() {
     "use strict";
@@ -133,8 +141,9 @@ var init_openai_service = __esm({
       }
     };
     OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-    DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
-    REQUEST_TIMEOUT_MS = 2e4;
+    DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct:free";
+    REQUEST_TIMEOUT_MS = 1e4;
+    RESPONSE_MAX_TOKENS = 320;
     MIXED_CATEGORY = "Mixed";
     SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"];
     cleanText = (value, maxLength) => value.replace(/\s+/g, " ").trim().slice(0, maxLength);
@@ -235,6 +244,76 @@ var init_openai_service = __esm({
       } catch {
         return null;
       }
+    };
+    categoryFallbacks = {
+      "System Design": {
+        prompt: "Design a service to support 1M daily users. Explain your architecture, data model, scaling approach, and reliability strategy.",
+        expectedPoints: [
+          "high-level architecture and components",
+          "data model or storage strategy",
+          "scaling and bottleneck handling",
+          "reliability, monitoring, and failure handling"
+        ]
+      },
+      Debugging: {
+        prompt: "A production endpoint latency doubled after a release. Walk through your debugging plan from detection to permanent fix.",
+        expectedPoints: [
+          "reproduce and isolate the issue",
+          "metrics/logging based root-cause analysis",
+          "rollback or mitigation plan",
+          "permanent fix and prevention steps"
+        ]
+      },
+      Behavioral: {
+        prompt: "Tell me about a time you disagreed with a team decision. How did you handle it, and what was the final outcome?",
+        expectedPoints: [
+          "clear context and conflict",
+          "actions taken with stakeholders",
+          "measurable outcome",
+          "lesson learned"
+        ]
+      },
+      Communication: {
+        prompt: "How would you explain a complex technical trade-off to a non-technical stakeholder who needs to decide quickly?",
+        expectedPoints: [
+          "plain-language explanation",
+          "options with trade-offs",
+          "recommendation and rationale",
+          "risk communication"
+        ]
+      },
+      Security: {
+        prompt: "You discover sensitive user data is accessible due to a configuration mistake. What are your first steps and long-term safeguards?",
+        expectedPoints: [
+          "containment and incident response",
+          "impact assessment and communication",
+          "root cause and remediation",
+          "long-term preventive controls"
+        ]
+      }
+    };
+    buildFallbackQuestion = (role, difficulty, category, previousQuestionCount) => {
+      const categoryTemplate = categoryFallbacks[category];
+      const genericPrompts = [
+        `For a ${role} role, describe a challenging problem you solved recently and the trade-offs in your approach.`,
+        `As a ${role}, how would you plan and execute a feature from requirements to production rollout?`,
+        `In a ${difficulty} interview, explain how you would detect and improve a performance bottleneck in a live system.`
+      ];
+      const genericExpectedPoints = [
+        "problem framing and assumptions",
+        "step-by-step approach",
+        "trade-offs and risks",
+        "validation and measurable outcomes"
+      ];
+      const fallbackPrompt = categoryTemplate ? categoryTemplate.prompt : genericPrompts[previousQuestionCount % genericPrompts.length];
+      const fallbackExpectedPoints = categoryTemplate ? categoryTemplate.expectedPoints : genericExpectedPoints;
+      return {
+        qid: `q${previousQuestionCount + 1}`,
+        category,
+        prompt: cleanText(fallbackPrompt, 1e3),
+        expectedPoints: fallbackExpectedPoints.map((item) => cleanText(item, 240)).slice(0, 6),
+        timeLimitSec: defaultTimeLimitByDifficulty(difficulty)
+      };
     };
   }
 });
@@ -760,42 +839,45 @@ async function generateFeedback(role, question, answer, expectedPoints = []) {
   const safeQuestion = cleanText2(question, 1e3);
   const safeAnswer = cleanText2(answer, 5e3);
   const safeExpectedPoints = expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText2(item, 200)).filter(Boolean).slice(0, 8);
-  const expectedPointsGuidance = safeExpectedPoints.length ? `Expected points to check for coverage:
-- ${safeExpectedPoints.join("\n- ")}` : "No expected points were provided; evaluate based on interview best practices.";
+  const heuristics = buildHeuristicAssessment(safeQuestion, safeAnswer, safeExpectedPoints);
+  if (heuristics.lowConfidence || heuristics.wordCount < 8) {
+    return {
+      feedback: heuristics.feedback,
+      followUp: heuristics.followUp
+    };
+  }
+  const expectedPointsGuidance = safeExpectedPoints.length ? `Expected points:
+- ${safeExpectedPoints.join("\n- ")}` : "Expected points were not supplied.";
   const prompt = `
-You are an expert interviewer evaluating a candidate for a ${safeRole} position.
+You are an interviewer evaluating a ${safeRole} candidate.
 
-Evaluate this answer with strict but constructive scoring.
+Score this answer from 0 to 10 in:
+1) technical correctness
+2) clarity
+3) completeness
 
-Scoring rubric (0-10 each):
-1) Technical correctness: factual accuracy, depth, and relevance.
-2) Clarity and communication: organization, precision, and readability.
-3) Completeness: coverage of key points, trade-offs, risks, and practical details.
-
-Also provide:
-- overall score (0-10): weighted average where technical has highest weight.
-- strengths: 2 to 4 concise bullets.
-- improvements: 2 to 4 concise bullets.
-- suggestion: one high-impact next step the candidate should take in the next answer.
-- follow-up question: one realistic follow-up question.
+Important:
+- Penalize incorrect facts and missing key concepts.
+- Do not give high technical/completeness scores when core points are wrong or missing.
+- Keep output concise and specific.
 
 ${expectedPointsGuidance}
 
-Return JSON only in this format:
+Return JSON only:
 {
   "feedback": {
-    "technical": 8.2,
-    "clarity": 7.8,
-    "completeness": 7.4,
-    "overall": 7.9,
-    "strengths": ["...", "..."],
-    "improvements": ["...", "..."],
+    "technical": 0,
+    "clarity": 0,
+    "completeness": 0,
+    "overall": 0,
+    "strengths": ["..."],
+    "improvements": ["..."],
     "suggestion": "..."
   },
   "followUp": {
     "qid": "followup1",
-    "prompt": "<follow-up question>",
-    "expectedPoints": ["point1", "point2"]
+    "prompt": "...",
+    "expectedPoints": ["..."]
   }
 }
 
@@ -807,12 +889,13 @@ Answer: ${safeAnswer}
     const response = await axios2.post(
       OPENROUTER_ENDPOINT2,
       {
-        model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL2,
+        model: process.env.OPENROUTER_FEEDBACK_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL2,
         messages: [
-          { role: "system", content: "You are a strict but fair AI interview evaluator." },
+          { role: "system", content: "You are a strict and accurate interview evaluator." },
           { role: "user", content: prompt }
         ],
-        temperature: 0.25
+        temperature: 0.1,
+        max_tokens: RESPONSE_MAX_TOKENS2
       },
       {
         timeout: REQUEST_TIMEOUT_MS2,
@@ -826,25 +909,61 @@ Answer: ${safeAnswer}
     );
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
-      throw new Error("Empty response from AI model");
+      return {
+        feedback: heuristics.feedback,
+        followUp: heuristics.followUp
+      };
     }
     const parsed = parseFeedback(text);
     if (!parsed) {
-      throw new Error("Invalid feedback format from AI model");
+      return {
+        feedback: heuristics.feedback,
+        followUp: heuristics.followUp
+      };
     }
-    return parsed;
-  } catch {
-    throw new Error("Feedback generation failed");
+    return {
+      feedback: calibrateFeedback(parsed.feedback, heuristics),
+      followUp: parsed.followUp || heuristics.followUp
+    };
+  } catch (error) {
+    if (axios2.isAxiosError(error)) {
+      console.warn("Feedback provider fallback used", {
+        status: error.response?.status,
+        code: error.code
+      });
+    }
+    return {
+      feedback: heuristics.feedback,
+      followUp: heuristics.followUp
+    };
   }
 }
-var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, REQUEST_TIMEOUT_MS2, cleanText2, clampScore, roundToOneDecimal, extractJson2, sanitizeList, parseFeedback;
+var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, REQUEST_TIMEOUT_MS2, RESPONSE_MAX_TOKENS2, STOP_WORDS, cleanText2, normalizeText, clampScore, roundToOneDecimal, extractJson2, sanitizeList, hasLowConfidenceLanguage, matchesExpectedPoint, buildHeuristicAssessment, calibrateFeedback, parseFeedback;
 var init_feedback_service = __esm({
   "backend/src/services/feedback.service.ts"() {
     "use strict";
     OPENROUTER_ENDPOINT2 = "https://openrouter.ai/api/v1/chat/completions";
-    DEFAULT_MODEL2 = "meta-llama/llama-3.3-70b-instruct:free";
-    REQUEST_TIMEOUT_MS2 = 2e4;
+    DEFAULT_MODEL2 = "meta-llama/llama-3.1-8b-instruct:free";
+    REQUEST_TIMEOUT_MS2 = 1e4;
+    RESPONSE_MAX_TOKENS2 = 450;
+    STOP_WORDS = /* @__PURE__ */ new Set([
+      "the",
+      "and",
+      "with",
+      "that",
+      "this",
+      "from",
+      "have",
+      "your",
+      "into",
+      "about",
+      "would",
+      "there",
+      "their",
+      "should"
+    ]);
     cleanText2 = (value, maxLength) => value.replace(/\s+/g, " ").trim().slice(0, maxLength);
+    normalizeText = (value) => value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     clampScore = (value) => {
       if (typeof value !== "number" || Number.isNaN(value)) return 0;
       return Math.max(0, Math.min(10, Number(value.toFixed(1))));
@@ -862,6 +981,160 @@ var init_feedback_service = __esm({
       if (!Array.isArray(value)) return [];
       return value.filter((item) => typeof item === "string").map((item) => cleanText2(item, itemMaxLength)).filter(Boolean).slice(0, maxItems);
     };
+    hasLowConfidenceLanguage = (answer) => /\b(i\s+(don'?t|do not|can'?t|cannot|am not sure)|not sure|no idea|idk|just guessing)\b/i.test(
+      answer
+    );
+    matchesExpectedPoint = (expectedPoint, normalizedAnswer) => {
+      const normalizedPoint = normalizeText(expectedPoint);
+      if (!normalizedPoint) return false;
+      if (normalizedAnswer.includes(normalizedPoint)) {
+        return true;
+      }
+      const keywords = normalizedPoint.split(" ").filter((token) => token.length > 3 && !STOP_WORDS.has(token)).slice(0, 6);
+      if (keywords.length === 0) {
+        return false;
+      }
+      const matchCount = keywords.filter((keyword) => normalizedAnswer.includes(keyword)).length;
+      const threshold = Math.max(1, Math.ceil(keywords.length * 0.5));
+      return matchCount >= threshold;
+    };
+    buildHeuristicAssessment = (question, answer, expectedPoints) => {
+      const normalizedAnswer = normalizeText(answer);
+      const wordCount = normalizedAnswer ? normalizedAnswer.split(" ").length : 0;
+      const lowConfidence = hasLowConfidenceLanguage(answer);
+      const matchedPoints = expectedPoints.filter(
+        (point) => matchesExpectedPoint(point, normalizedAnswer)
+      );
+      const missingPoints = expectedPoints.filter((point) => !matchedPoints.includes(point));
+      const coverageRatio = expectedPoints.length > 0 ? matchedPoints.length / expectedPoints.length : 0.5;
+      let technical = expectedPoints.length > 0 ? 1.5 + coverageRatio * 7.5 : 2.5 + Math.min(wordCount, 160) / 28;
+      let completeness = expectedPoints.length > 0 ? 1.2 + coverageRatio * 8 : 2.2 + Math.min(wordCount, 160) / 30;
+      let clarity = 2 + Math.min(wordCount, 180) / 35;
+      if (wordCount < 40) {
+        clarity -= 0.6;
+      }
+      if (wordCount < 20) {
+        technical = Math.min(technical, 4.2);
+        completeness = Math.min(completeness, 4);
+        clarity = Math.min(clarity, 5);
+      }
+      if (wordCount < 10) {
+        technical = Math.min(technical, 2.8);
+        completeness = Math.min(completeness, 2.6);
+        clarity = Math.min(clarity, 4);
+      }
+      if (lowConfidence) {
+        technical = Math.min(technical, 2.5);
+        completeness = Math.min(completeness, 2.5);
+        clarity = Math.min(clarity, 4.5);
+      }
+      if (expectedPoints.length >= 2) {
+        if (coverageRatio < 0.35) {
+          technical = Math.min(technical, 4.8);
+          completeness = Math.min(completeness, 4.6);
+        }
+        if (coverageRatio === 0) {
+          technical = Math.min(technical, 2.8);
+          completeness = Math.min(completeness, 2.5);
+        }
+      }
+      technical = clampScore(technical);
+      clarity = clampScore(clarity);
+      completeness = clampScore(completeness);
+      const overall = clampScore(
+        roundToOneDecimal(technical * 0.5 + clarity * 0.2 + completeness * 0.3)
+      );
+      const strengths = [];
+      if (clarity >= 6) {
+        strengths.push("Your response is easy to follow.");
+      }
+      if (wordCount >= 35) {
+        strengths.push("You provided enough detail for meaningful evaluation.");
+      }
+      if (matchedPoints.length > 0) {
+        strengths.push(
+          `You covered ${matchedPoints.length} key point${matchedPoints.length > 1 ? "s" : ""}.`
+        );
+      }
+      if (strengths.length === 0) {
+        strengths.push("You attempted the question and gave an initial direction.");
+      }
+      const improvements = [];
+      if (missingPoints.length > 0) {
+        improvements.push(`Address these missing points: ${missingPoints.join("; ")}.`);
+      }
+      if (technical <= 4.5) {
+        improvements.push("Correct technical inaccuracies before the next attempt.");
+      }
+      if (completeness <= 4.5) {
+        improvements.push("Explain trade-offs, edge cases, and implementation details.");
+      }
+      if (improvements.length === 0) {
+        improvements.push("Add one concrete project example to make your answer stronger.");
+      }
+      const suggestion = cleanText2(improvements[0], 420) || "Add clearer technical depth and concrete evidence.";
+      const followUpPoint = missingPoints[0];
+      const followUpPrompt = followUpPoint ? `Can you explain ${followUpPoint.toLowerCase()} and how you would apply it in this scenario?` : `Can you walk through one concrete example for this question and discuss the trade-offs?`;
+      return {
+        feedback: {
+          technical,
+          clarity,
+          completeness,
+          overall,
+          suggestion,
+          strengths: strengths.map((item) => cleanText2(item, 160)).slice(0, 4),
+          improvements: improvements.map((item) => cleanText2(item, 160)).slice(0, 4)
+        },
+        followUp: {
+          qid: "followup1",
+          prompt: cleanText2(followUpPrompt, 1e3),
+          expectedPoints: missingPoints.map((item) => cleanText2(item, 240)).slice(0, 3)
+        },
+        coverageRatio,
+        expectedPointCount: expectedPoints.length,
+        lowConfidence,
+        wordCount
+      };
+    };
+    calibrateFeedback = (aiFeedback, heuristics) => {
+      const calibratedTechnical = clampScore(
+        Math.min(aiFeedback.technical, heuristics.feedback.technical + 1.2)
+      );
+      const calibratedCompleteness = clampScore(
+        Math.min(aiFeedback.completeness, heuristics.feedback.completeness + 1.2)
+      );
+      const calibratedClarity = clampScore(
+        Math.min(aiFeedback.clarity, heuristics.feedback.clarity + 1.5)
+      );
+      let technical = calibratedTechnical;
+      let completeness = calibratedCompleteness;
+      let clarity = calibratedClarity;
+      if (heuristics.expectedPointCount >= 2 && heuristics.coverageRatio < 0.35) {
+        technical = Math.min(technical, 5);
+        completeness = Math.min(completeness, 5);
+      }
+      if (heuristics.expectedPointCount >= 2 && heuristics.coverageRatio === 0) {
+        technical = Math.min(technical, 3);
+        completeness = Math.min(completeness, 3);
+      }
+      if (heuristics.lowConfidence || heuristics.wordCount < 12) {
+        technical = Math.min(technical, 3.5);
+        completeness = Math.min(completeness, 3.5);
+      }
+      technical = clampScore(technical);
+      clarity = clampScore(clarity);
+      completeness = clampScore(completeness);
+      const overall = clampScore(roundToOneDecimal(technical * 0.5 + clarity * 0.2 + completeness * 0.3));
+      return {
+        technical,
+        clarity,
+        completeness,
+        overall,
+        suggestion: cleanText2(aiFeedback.suggestion, 420) || heuristics.feedback.suggestion,
+        strengths: aiFeedback.strengths.length > 0 ? aiFeedback.strengths.map((item) => cleanText2(item, 160)).slice(0, 4) : heuristics.feedback.strengths,
+        improvements: aiFeedback.improvements.length > 0 ? aiFeedback.improvements.map((item) => cleanText2(item, 160)).slice(0, 4) : heuristics.feedback.improvements
+      };
+    };
     parseFeedback = (raw) => {
       try {
         const parsed = JSON.parse(extractJson2(raw));
@@ -870,7 +1143,7 @@ var init_feedback_service = __esm({
         const technical = clampScore(feedback.technical);
         const clarity = clampScore(feedback.clarity);
         const completeness = clampScore(feedback.completeness);
-        const fallbackOverall = roundToOneDecimal((technical + clarity + completeness) / 3);
+        const fallbackOverall = roundToOneDecimal(technical * 0.5 + clarity * 0.2 + completeness * 0.3);
         const strengths = sanitizeList(feedback.strengths, 4, 160);
         const improvements = sanitizeList(feedback.improvements, 4, 160);
         const sanitizedFeedback = {
@@ -882,8 +1155,8 @@ var init_feedback_service = __esm({
             typeof feedback.suggestion === "string" ? feedback.suggestion : "No suggestion generated",
             420
           ),
-          strengths: strengths.length > 0 ? strengths : ["Good attempt to answer the core question."],
-          improvements: improvements.length > 0 ? improvements : ["Add clearer structure and concrete evidence to improve impact."]
+          strengths,
+          improvements
         };
         const followUp = parsed.followUp;
         const sanitizedFollowUp = followUp && typeof followUp.prompt === "string" ? {

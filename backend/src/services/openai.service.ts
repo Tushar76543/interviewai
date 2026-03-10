@@ -28,8 +28,9 @@ export class AiProviderError extends Error {
 }
 
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct:free";
-const REQUEST_TIMEOUT_MS = 20000;
+const DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct:free";
+const REQUEST_TIMEOUT_MS = 10000;
+const RESPONSE_MAX_TOKENS = 320;
 const MIXED_CATEGORY = "Mixed";
 const SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"] as const;
 
@@ -173,6 +174,94 @@ const parseQuestion = (
   }
 };
 
+const categoryFallbacks: Record<string, { prompt: string; expectedPoints: string[] }> = {
+  "System Design": {
+    prompt:
+      "Design a service to support 1M daily users. Explain your architecture, data model, scaling approach, and reliability strategy.",
+    expectedPoints: [
+      "high-level architecture and components",
+      "data model or storage strategy",
+      "scaling and bottleneck handling",
+      "reliability, monitoring, and failure handling",
+    ],
+  },
+  Debugging: {
+    prompt:
+      "A production endpoint latency doubled after a release. Walk through your debugging plan from detection to permanent fix.",
+    expectedPoints: [
+      "reproduce and isolate the issue",
+      "metrics/logging based root-cause analysis",
+      "rollback or mitigation plan",
+      "permanent fix and prevention steps",
+    ],
+  },
+  Behavioral: {
+    prompt:
+      "Tell me about a time you disagreed with a team decision. How did you handle it, and what was the final outcome?",
+    expectedPoints: [
+      "clear context and conflict",
+      "actions taken with stakeholders",
+      "measurable outcome",
+      "lesson learned",
+    ],
+  },
+  Communication: {
+    prompt:
+      "How would you explain a complex technical trade-off to a non-technical stakeholder who needs to decide quickly?",
+    expectedPoints: [
+      "plain-language explanation",
+      "options with trade-offs",
+      "recommendation and rationale",
+      "risk communication",
+    ],
+  },
+  Security: {
+    prompt:
+      "You discover sensitive user data is accessible due to a configuration mistake. What are your first steps and long-term safeguards?",
+    expectedPoints: [
+      "containment and incident response",
+      "impact assessment and communication",
+      "root cause and remediation",
+      "long-term preventive controls",
+    ],
+  },
+};
+
+const buildFallbackQuestion = (
+  role: string,
+  difficulty: string,
+  category: string,
+  previousQuestionCount: number
+): GeneratedQuestion => {
+  const categoryTemplate = categoryFallbacks[category];
+  const genericPrompts = [
+    `For a ${role} role, describe a challenging problem you solved recently and the trade-offs in your approach.`,
+    `As a ${role}, how would you plan and execute a feature from requirements to production rollout?`,
+    `In a ${difficulty} interview, explain how you would detect and improve a performance bottleneck in a live system.`,
+  ];
+  const genericExpectedPoints = [
+    "problem framing and assumptions",
+    "step-by-step approach",
+    "trade-offs and risks",
+    "validation and measurable outcomes",
+  ];
+
+  const fallbackPrompt = categoryTemplate
+    ? categoryTemplate.prompt
+    : genericPrompts[previousQuestionCount % genericPrompts.length];
+  const fallbackExpectedPoints = categoryTemplate
+    ? categoryTemplate.expectedPoints
+    : genericExpectedPoints;
+
+  return {
+    qid: `q${previousQuestionCount + 1}`,
+    category,
+    prompt: cleanText(fallbackPrompt, 1000),
+    expectedPoints: fallbackExpectedPoints.map((item) => cleanText(item, 240)).slice(0, 6),
+    timeLimitSec: defaultTimeLimitByDifficulty(difficulty),
+  };
+};
+
 export async function generateQuestion(
   role: string,
   difficulty: string,
@@ -238,13 +327,8 @@ Question requirements:
 ${previousPromptGuidance}
 ${previousCategoryGuidance}
 
-Set timeLimitSec by complexity:
-- Easy: 90 to 150
-- Medium: 120 to 210
-- FAANG: 180 to 300
-
 Return JSON only in this format:
-{"qid":"q1","category":"<category>","prompt":"<question>","expectedPoints":["point1","point2","point3"],"timeLimitSec":150}
+{"qid":"q1","category":"<category>","prompt":"<question>","expectedPoints":["point1","point2","point3"]}
 `;
 
   const referer = process.env.FRONTEND_URL?.startsWith("http")
@@ -255,12 +339,13 @@ Return JSON only in this format:
     const response = await axios.post(
       OPENROUTER_ENDPOINT,
       {
-        model: process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
+        model: process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
         messages: [
           { role: "system", content: "You are an AI Interview Coach." },
           { role: "user", content: prompt },
         ],
-        temperature: 0.85,
+        temperature: 0.5,
+        max_tokens: RESPONSE_MAX_TOKENS,
       },
       {
         timeout: REQUEST_TIMEOUT_MS,
@@ -280,7 +365,12 @@ Return JSON only in this format:
 
     const parsed = parseQuestion(text, resolvedCategory, resolvedDifficulty);
     if (!parsed) {
-      throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an invalid response format", 502);
+      return buildFallbackQuestion(
+        safeRole,
+        resolvedDifficulty,
+        resolvedCategory,
+        safePrevious.length
+      );
     }
 
     return parsed;
@@ -310,18 +400,24 @@ Return JSON only in this format:
         throw new AiProviderError("AI_AUTH_FAILED", "AI API key rejected by provider", 502);
       }
 
-      if (status === 429) {
-        throw new AiProviderError("AI_RATE_LIMITED", "AI provider rate limit reached", 429);
-      }
-
-      if (error.code === "ECONNABORTED") {
-        throw new AiProviderError("AI_TIMEOUT", "AI provider request timed out", 504);
+      if (status === 429 || error.code === "ECONNABORTED" || !status || status >= 500) {
+        return buildFallbackQuestion(
+          safeRole,
+          resolvedDifficulty,
+          resolvedCategory,
+          safePrevious.length
+        );
       }
 
       throw new AiProviderError("AI_PROVIDER_ERROR", "AI provider request failed", 502);
     }
 
     console.error("Unexpected question generation error", error);
-    throw new AiProviderError("AI_PROVIDER_ERROR", "Failed to generate question", 500);
+    return buildFallbackQuestion(
+      safeRole,
+      resolvedDifficulty,
+      resolvedCategory,
+      safePrevious.length
+    );
   }
 }

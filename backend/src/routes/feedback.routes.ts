@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import { generateFeedback } from "../services/feedback.service.js";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import {
@@ -19,9 +19,14 @@ router.post(
   async (req, res) => {
     try {
       const user = (req as express.Request & { user: { _id: string } }).user;
-      const { role, question, answer, sessionId } = req.body;
+      const { role, question, answer, expectedPoints, sessionId } = req.body;
 
-      const result = await generateFeedback(role, question, answer);
+      const result = await generateFeedback(
+        role,
+        question,
+        answer,
+        Array.isArray(expectedPoints) ? expectedPoints : []
+      );
 
       if (sessionId) {
         const session = await InterviewSession.findOne({

@@ -21,7 +21,7 @@ export default function NavHeader({ showNav = true }: NavHeaderProps) {
     <header className="nav-header">
       <div className="nav-inner">
         <Link to="/dashboard" className="nav-logo">
-          🧠 Interview AI
+          Interview AI
         </Link>
         <nav className="nav-links">
           <Link to="/dashboard">Dashboard</Link>

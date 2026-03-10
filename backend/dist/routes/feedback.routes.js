@@ -8,8 +8,8 @@ const router = express.Router();
 router.post("/", authMiddleware, feedbackRateLimit, ...feedbackValidation, handleValidationErrors, async (req, res) => {
     try {
         const user = req.user;
-        const { role, question, answer, sessionId } = req.body;
-        const result = await generateFeedback(role, question, answer);
+        const { role, question, answer, expectedPoints, sessionId } = req.body;
+        const result = await generateFeedback(role, question, answer, Array.isArray(expectedPoints) ? expectedPoints : []);
         if (sessionId) {
             const session = await InterviewSession.findOne({
                 _id: sessionId,

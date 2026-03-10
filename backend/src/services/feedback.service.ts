@@ -1,11 +1,14 @@
-﻿import axios from "axios";
+import axios from "axios";
 
 type FeedbackPayload = {
   feedback: {
     technical: number;
     clarity: number;
     completeness: number;
+    overall: number;
     suggestion: string;
+    strengths: string[];
+    improvements: string[];
   };
   followUp: {
     qid: string;
@@ -26,6 +29,8 @@ const clampScore = (value: unknown) => {
   return Math.max(0, Math.min(10, Number(value.toFixed(1))));
 };
 
+const roundToOneDecimal = (value: number) => Math.round(value * 10) / 10;
+
 const extractJson = (value: string) => {
   const trimmed = value.trim();
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
@@ -36,6 +41,16 @@ const extractJson = (value: string) => {
   return match ? match[0] : "";
 };
 
+const sanitizeList = (value: unknown, maxItems: number, itemMaxLength: number) => {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => cleanText(item, itemMaxLength))
+    .filter(Boolean)
+    .slice(0, maxItems);
+};
+
 const parseFeedback = (raw: string): FeedbackPayload | null => {
   try {
     const parsed = JSON.parse(extractJson(raw)) as Partial<FeedbackPayload>;
@@ -43,29 +58,43 @@ const parseFeedback = (raw: string): FeedbackPayload | null => {
     const feedback = parsed.feedback;
     if (!feedback) return null;
 
+    const technical = clampScore(feedback.technical);
+    const clarity = clampScore(feedback.clarity);
+    const completeness = clampScore(feedback.completeness);
+    const fallbackOverall = roundToOneDecimal((technical + clarity + completeness) / 3);
+
+    const strengths = sanitizeList(feedback.strengths, 4, 160);
+    const improvements = sanitizeList(feedback.improvements, 4, 160);
+
     const sanitizedFeedback = {
-      technical: clampScore(feedback.technical),
-      clarity: clampScore(feedback.clarity),
-      completeness: clampScore(feedback.completeness),
+      technical,
+      clarity,
+      completeness,
+      overall:
+        typeof feedback.overall === "number" && Number.isFinite(feedback.overall)
+          ? clampScore(feedback.overall)
+          : fallbackOverall,
       suggestion: cleanText(
         typeof feedback.suggestion === "string" ? feedback.suggestion : "No suggestion generated",
-        320
+        420
       ),
+      strengths: strengths.length > 0 ? strengths : ["Good attempt to answer the core question."],
+      improvements:
+        improvements.length > 0
+          ? improvements
+          : ["Add clearer structure and concrete evidence to improve impact."],
     };
 
     const followUp = parsed.followUp;
     const sanitizedFollowUp =
       followUp && typeof followUp.prompt === "string"
         ? {
-            qid: typeof followUp.qid === "string" ? cleanText(followUp.qid, 40) || "followup1" : "followup1",
+            qid:
+              typeof followUp.qid === "string"
+                ? cleanText(followUp.qid, 40) || "followup1"
+                : "followup1",
             prompt: cleanText(followUp.prompt, 1000),
-            expectedPoints: Array.isArray(followUp.expectedPoints)
-              ? followUp.expectedPoints
-                  .filter((item): item is string => typeof item === "string")
-                  .map((item) => cleanText(item, 240))
-                  .filter(Boolean)
-                  .slice(0, 6)
-              : [],
+            expectedPoints: sanitizeList(followUp.expectedPoints, 6, 240),
           }
         : null;
 
@@ -81,7 +110,8 @@ const parseFeedback = (raw: string): FeedbackPayload | null => {
 export async function generateFeedback(
   role: string,
   question: string,
-  answer: string
+  answer: string,
+  expectedPoints: string[] = []
 ): Promise<FeedbackPayload> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
@@ -91,25 +121,44 @@ export async function generateFeedback(
   const safeRole = cleanText(role, 80);
   const safeQuestion = cleanText(question, 1000);
   const safeAnswer = cleanText(answer, 5000);
+  const safeExpectedPoints = expectedPoints
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => cleanText(item, 200))
+    .filter(Boolean)
+    .slice(0, 8);
+  const expectedPointsGuidance = safeExpectedPoints.length
+    ? `Expected points to check for coverage:\n- ${safeExpectedPoints.join("\n- ")}`
+    : "No expected points were provided; evaluate based on interview best practices.";
 
   const prompt = `
 You are an expert interviewer evaluating a candidate for a ${safeRole} position.
 
-Evaluate the following answer in three areas:
-1. Technical correctness (0-10)
-2. Clarity and communication (0-10)
-3. Completeness (0-10)
+Evaluate this answer with strict but constructive scoring.
 
-Also provide a short suggestion (1-2 lines) for improvement.
-Finally, generate one short follow-up question.
+Scoring rubric (0-10 each):
+1) Technical correctness: factual accuracy, depth, and relevance.
+2) Clarity and communication: organization, precision, and readability.
+3) Completeness: coverage of key points, trade-offs, risks, and practical details.
+
+Also provide:
+- overall score (0-10): weighted average where technical has highest weight.
+- strengths: 2 to 4 concise bullets.
+- improvements: 2 to 4 concise bullets.
+- suggestion: one high-impact next step the candidate should take in the next answer.
+- follow-up question: one realistic follow-up question.
+
+${expectedPointsGuidance}
 
 Return JSON only in this format:
 {
   "feedback": {
-    "technical": 8.5,
-    "clarity": 9,
-    "completeness": 7.5,
-    "suggestion": "Explain trade-offs more clearly."
+    "technical": 8.2,
+    "clarity": 7.8,
+    "completeness": 7.4,
+    "overall": 7.9,
+    "strengths": ["...", "..."],
+    "improvements": ["...", "..."],
+    "suggestion": "..."
   },
   "followUp": {
     "qid": "followup1",
@@ -135,7 +184,7 @@ Answer: ${safeAnswer}
           { role: "system", content: "You are a strict but fair AI interview evaluator." },
           { role: "user", content: prompt },
         ],
-        temperature: 0.4,
+        temperature: 0.25,
       },
       {
         timeout: REQUEST_TIMEOUT_MS,

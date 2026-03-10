@@ -323,7 +323,10 @@ var init_interviewSession = __esm({
           technical: Number,
           clarity: Number,
           completeness: Number,
-          suggestion: String
+          overall: Number,
+          suggestion: String,
+          strengths: [String],
+          improvements: [String]
         }
       },
       { _id: false }
@@ -389,6 +392,8 @@ var init_validation_middleware = __esm({
       body("role").trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
       body("question").trim().isLength({ min: 3, max: QUESTION_MAX_LENGTH }).withMessage(`Question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
       body("answer").trim().isLength({ min: 1, max: ANSWER_MAX_LENGTH }).withMessage(`Answer must be between 1 and ${ANSWER_MAX_LENGTH} characters`),
+      body("expectedPoints").optional().isArray({ max: 8 }).withMessage("expectedPoints can contain at most 8 items"),
+      body("expectedPoints.*").optional().isString().trim().isLength({ min: 2, max: 240 }).withMessage("Each expected point must be between 2 and 240 characters"),
       body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
     ];
   }
@@ -746,7 +751,7 @@ var init_interview_routes = __esm({
 
 // backend/src/services/feedback.service.ts
 import axios2 from "axios";
-async function generateFeedback(role, question, answer) {
+async function generateFeedback(role, question, answer, expectedPoints = []) {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("AI provider is not configured");
@@ -754,24 +759,38 @@ async function generateFeedback(role, question, answer) {
   const safeRole = cleanText2(role, 80);
   const safeQuestion = cleanText2(question, 1e3);
   const safeAnswer = cleanText2(answer, 5e3);
+  const safeExpectedPoints = expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText2(item, 200)).filter(Boolean).slice(0, 8);
+  const expectedPointsGuidance = safeExpectedPoints.length ? `Expected points to check for coverage:
+- ${safeExpectedPoints.join("\n- ")}` : "No expected points were provided; evaluate based on interview best practices.";
   const prompt = `
 You are an expert interviewer evaluating a candidate for a ${safeRole} position.
 
-Evaluate the following answer in three areas:
-1. Technical correctness (0-10)
-2. Clarity and communication (0-10)
-3. Completeness (0-10)
+Evaluate this answer with strict but constructive scoring.
 
-Also provide a short suggestion (1-2 lines) for improvement.
-Finally, generate one short follow-up question.
+Scoring rubric (0-10 each):
+1) Technical correctness: factual accuracy, depth, and relevance.
+2) Clarity and communication: organization, precision, and readability.
+3) Completeness: coverage of key points, trade-offs, risks, and practical details.
+
+Also provide:
+- overall score (0-10): weighted average where technical has highest weight.
+- strengths: 2 to 4 concise bullets.
+- improvements: 2 to 4 concise bullets.
+- suggestion: one high-impact next step the candidate should take in the next answer.
+- follow-up question: one realistic follow-up question.
+
+${expectedPointsGuidance}
 
 Return JSON only in this format:
 {
   "feedback": {
-    "technical": 8.5,
-    "clarity": 9,
-    "completeness": 7.5,
-    "suggestion": "Explain trade-offs more clearly."
+    "technical": 8.2,
+    "clarity": 7.8,
+    "completeness": 7.4,
+    "overall": 7.9,
+    "strengths": ["...", "..."],
+    "improvements": ["...", "..."],
+    "suggestion": "..."
   },
   "followUp": {
     "qid": "followup1",
@@ -793,7 +812,7 @@ Answer: ${safeAnswer}
           { role: "system", content: "You are a strict but fair AI interview evaluator." },
           { role: "user", content: prompt }
         ],
-        temperature: 0.4
+        temperature: 0.25
       },
       {
         timeout: REQUEST_TIMEOUT_MS2,
@@ -818,7 +837,7 @@ Answer: ${safeAnswer}
     throw new Error("Feedback generation failed");
   }
 }
-var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, REQUEST_TIMEOUT_MS2, cleanText2, clampScore, extractJson2, parseFeedback;
+var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, REQUEST_TIMEOUT_MS2, cleanText2, clampScore, roundToOneDecimal, extractJson2, sanitizeList, parseFeedback;
 var init_feedback_service = __esm({
   "backend/src/services/feedback.service.ts"() {
     "use strict";
@@ -830,6 +849,7 @@ var init_feedback_service = __esm({
       if (typeof value !== "number" || Number.isNaN(value)) return 0;
       return Math.max(0, Math.min(10, Number(value.toFixed(1))));
     };
+    roundToOneDecimal = (value) => Math.round(value * 10) / 10;
     extractJson2 = (value) => {
       const trimmed = value.trim();
       if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
@@ -838,25 +858,38 @@ var init_feedback_service = __esm({
       const match = trimmed.match(/\{[\s\S]*\}/);
       return match ? match[0] : "";
     };
+    sanitizeList = (value, maxItems, itemMaxLength) => {
+      if (!Array.isArray(value)) return [];
+      return value.filter((item) => typeof item === "string").map((item) => cleanText2(item, itemMaxLength)).filter(Boolean).slice(0, maxItems);
+    };
     parseFeedback = (raw) => {
       try {
         const parsed = JSON.parse(extractJson2(raw));
         const feedback = parsed.feedback;
         if (!feedback) return null;
+        const technical = clampScore(feedback.technical);
+        const clarity = clampScore(feedback.clarity);
+        const completeness = clampScore(feedback.completeness);
+        const fallbackOverall = roundToOneDecimal((technical + clarity + completeness) / 3);
+        const strengths = sanitizeList(feedback.strengths, 4, 160);
+        const improvements = sanitizeList(feedback.improvements, 4, 160);
         const sanitizedFeedback = {
-          technical: clampScore(feedback.technical),
-          clarity: clampScore(feedback.clarity),
-          completeness: clampScore(feedback.completeness),
+          technical,
+          clarity,
+          completeness,
+          overall: typeof feedback.overall === "number" && Number.isFinite(feedback.overall) ? clampScore(feedback.overall) : fallbackOverall,
           suggestion: cleanText2(
             typeof feedback.suggestion === "string" ? feedback.suggestion : "No suggestion generated",
-            320
-          )
+            420
+          ),
+          strengths: strengths.length > 0 ? strengths : ["Good attempt to answer the core question."],
+          improvements: improvements.length > 0 ? improvements : ["Add clearer structure and concrete evidence to improve impact."]
         };
         const followUp = parsed.followUp;
         const sanitizedFollowUp = followUp && typeof followUp.prompt === "string" ? {
           qid: typeof followUp.qid === "string" ? cleanText2(followUp.qid, 40) || "followup1" : "followup1",
           prompt: cleanText2(followUp.prompt, 1e3),
-          expectedPoints: Array.isArray(followUp.expectedPoints) ? followUp.expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText2(item, 240)).filter(Boolean).slice(0, 6) : []
+          expectedPoints: sanitizeList(followUp.expectedPoints, 6, 240)
         } : null;
         return {
           feedback: sanitizedFeedback,
@@ -890,8 +923,13 @@ var init_feedback_routes = __esm({
       async (req, res) => {
         try {
           const user = req.user;
-          const { role, question, answer, sessionId } = req.body;
-          const result = await generateFeedback(role, question, answer);
+          const { role, question, answer, expectedPoints, sessionId } = req.body;
+          const result = await generateFeedback(
+            role,
+            question,
+            answer,
+            Array.isArray(expectedPoints) ? expectedPoints : []
+          );
           if (sessionId) {
             const session = await interviewSession_default.findOne({
               _id: sessionId,

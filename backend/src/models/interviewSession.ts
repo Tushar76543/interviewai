@@ -8,7 +8,10 @@ export interface IQAEntry {
     technical: number;
     clarity: number;
     completeness: number;
+    overall?: number;
     suggestion: string;
+    strengths?: string[];
+    improvements?: string[];
   };
 }
 
@@ -30,7 +33,10 @@ const QAEntrySchema = new Schema<IQAEntry>(
       technical: Number,
       clarity: Number,
       completeness: Number,
+      overall: Number,
       suggestion: String,
+      strengths: [String],
+      improvements: [String],
     },
   },
   { _id: false }

@@ -12,7 +12,10 @@ interface QAEntry {
     technical: number;
     clarity: number;
     completeness: number;
+    overall?: number;
     suggestion: string;
+    strengths?: string[];
+    improvements?: string[];
   };
 }
 
@@ -25,6 +28,15 @@ interface Session {
   lastActivityAt: string;
 }
 
+const questionAverage = (entry: QAEntry) => {
+  if (!entry.feedback) return null;
+  if (typeof entry.feedback.overall === "number") {
+    return entry.feedback.overall;
+  }
+
+  return (entry.feedback.technical + entry.feedback.clarity + entry.feedback.completeness) / 3;
+};
+
 export default function History() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
@@ -35,15 +47,15 @@ export default function History() {
     api
       .get("/history")
       .then((res) => setSessions(res.data.sessions || []))
-      .catch((error: unknown) => {
-        setError(extractApiErrorMessage(error, "Failed to load history."));
+      .catch((requestError: unknown) => {
+        setError(extractApiErrorMessage(requestError, "Failed to load history."));
       })
       .finally(() => setLoading(false));
   }, []);
 
   const formatDate = (dateStr: string) => {
-    const d = new Date(dateStr);
-    return d.toLocaleDateString(undefined, {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString(undefined, {
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -53,24 +65,20 @@ export default function History() {
   };
 
   const getAvgScore = (questions: QAEntry[]) => {
-    const withFeedback = questions.filter((q) => q.feedback);
-    if (withFeedback.length === 0) return null;
-    const total = withFeedback.reduce(
-      (sum, q) =>
-        sum +
-        (q.feedback!.technical + q.feedback!.clarity + q.feedback!.completeness) / 3,
-      0
-    );
-    return total / withFeedback.length;
+    const scored = questions.map((entry) => questionAverage(entry)).filter((value): value is number => value !== null);
+    if (scored.length === 0) return null;
+
+    const total = scored.reduce((sum, score) => sum + score, 0);
+    return total / scored.length;
   };
 
   return (
     <div className="dashboard-container">
       <NavHeader />
       <div className="history-page">
-        <h1 className="fade-in">📊 Interview History</h1>
+        <h1 className="fade-in">Interview History</h1>
         <p className="welcome-text fade-in">
-          Review your past practice sessions and track your progress
+          Review your past sessions, feedback details, and improvement areas.
         </p>
 
         {loading && (
@@ -83,9 +91,9 @@ export default function History() {
         {error && <div className="error-message">{error}</div>}
 
         {!loading && !error && sessions.length === 0 && (
-          <div className="glass-card" style={{ padding: "var(--spacing-2xl)", textAlign: "center" }}>
-            <p style={{ color: "var(--light-300)", marginBottom: "var(--spacing-lg)" }}>
-              No interview sessions yet. Start practicing to see your history here!
+          <div className="glass-card" style={{ padding: "var(--space-2xl)", textAlign: "center" }}>
+            <p style={{ color: "var(--slate-500)", marginBottom: "var(--space-lg)" }}>
+              No interview sessions yet. Start practicing to build your progress log.
             </p>
             <Link to="/interview" className="btn-primary">
               Start Interview
@@ -108,33 +116,52 @@ export default function History() {
                       <span className="history-role">{session.role}</span>
                       <span className="history-difficulty">{session.difficulty}</span>
                       <span className="history-date">{formatDate(session.lastActivityAt)}</span>
-                      {avgScore !== null && (
-                        <span className="history-score">
-                          Avg: {avgScore.toFixed(1)}/10
-                        </span>
-                      )}
+                      {avgScore !== null && <span className="history-score">Avg: {avgScore.toFixed(1)}/10</span>}
                     </div>
-                    <span className="history-expand">{isExpanded ? "▼" : "▶"}</span>
+                    <span className="history-expand">{isExpanded ? "Collapse" : "Expand"}</span>
                   </div>
                   {isExpanded && (
                     <div className="history-card-body">
-                      {session.questions.map((q, i) => (
-                        <div key={i} className="history-qa">
+                      {session.questions.map((entry, index) => (
+                        <div key={`${session._id}-${index}`} className="history-qa">
                           <div className="history-q">
-                            <strong>Q{i + 1}:</strong> {q.question}
+                            <strong>Q{index + 1}:</strong> {entry.question}
                           </div>
-                          {q.answer && (
+                          {entry.answer && (
                             <div className="history-a">
-                              <strong>Your answer:</strong> {q.answer}
+                              <strong>Your answer:</strong> {entry.answer}
                             </div>
                           )}
-                          {q.feedback && (
+                          {entry.feedback && (
                             <div className="history-feedback">
-                              <span>Technical: {q.feedback.technical}/10</span>
-                              <span>Clarity: {q.feedback.clarity}/10</span>
-                              <span>Completeness: {q.feedback.completeness}/10</span>
-                              {q.feedback.suggestion && (
-                                <p className="history-suggestion">{q.feedback.suggestion}</p>
+                              <span>Technical: {entry.feedback.technical}/10</span>
+                              <span>Clarity: {entry.feedback.clarity}/10</span>
+                              <span>Completeness: {entry.feedback.completeness}/10</span>
+                              {typeof entry.feedback.overall === "number" && (
+                                <span>Overall: {entry.feedback.overall}/10</span>
+                              )}
+                              {entry.feedback.suggestion && (
+                                <p className="history-suggestion">{entry.feedback.suggestion}</p>
+                              )}
+                              {entry.feedback.strengths && entry.feedback.strengths.length > 0 && (
+                                <div className="history-detail-list">
+                                  <strong>Strengths:</strong>
+                                  <ul>
+                                    {entry.feedback.strengths.map((item) => (
+                                      <li key={item}>{item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {entry.feedback.improvements && entry.feedback.improvements.length > 0 && (
+                                <div className="history-detail-list">
+                                  <strong>Improve next:</strong>
+                                  <ul>
+                                    {entry.feedback.improvements.map((item) => (
+                                      <li key={item}>{item}</li>
+                                    ))}
+                                  </ul>
+                                </div>
                               )}
                             </div>
                           )}

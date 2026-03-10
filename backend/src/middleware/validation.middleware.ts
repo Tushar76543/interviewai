@@ -1,4 +1,4 @@
-﻿import { Request, Response, NextFunction } from "express";
+import { Request, Response, NextFunction } from "express";
 import { body, validationResult } from "express-validator";
 
 const ROLE_MIN_LENGTH = 2;
@@ -85,6 +85,16 @@ export const feedbackValidation = [
     .trim()
     .isLength({ min: 1, max: ANSWER_MAX_LENGTH })
     .withMessage(`Answer must be between 1 and ${ANSWER_MAX_LENGTH} characters`),
+  body("expectedPoints")
+    .optional()
+    .isArray({ max: 8 })
+    .withMessage("expectedPoints can contain at most 8 items"),
+  body("expectedPoints.*")
+    .optional()
+    .isString()
+    .trim()
+    .isLength({ min: 2, max: 240 })
+    .withMessage("Each expected point must be between 2 and 240 characters"),
   body("sessionId")
     .optional()
     .isMongoId()

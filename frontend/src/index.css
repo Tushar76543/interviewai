@@ -1,9 +1,9 @@
-/* Import Google Fonts - Clean, Modern Sans-Serif */
+/* Import Google Fonts */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap'); /* For headings */
 
 :root {
-  /* 🎨 Primary Brand Color - Deep "Trust" Indigo (Professional & Human) */
+  /* Primary Brand Color */
   --primary-hue: 245; /* Indigo/Deep Blue - distinctive but professional */
   --primary-500: hsl(var(--primary-hue), 75%, 60%); 
   --primary-600: hsl(var(--primary-hue), 75%, 50%); /* Main Action Color */
@@ -22,7 +22,7 @@
   --danger-bg: hsl(0, 85%, 97%);
   --warning-500: hsl(35, 90%, 50%);
 
-  /* 🏙️ Neutral Palette - Clean SaaS Style (Light Mode) */
+  /* Neutral Palette (Light Mode) */
   --white: #ffffff;
   --slate-50: #f8fafc;  /* App Background */
   --slate-100: #f1f5f9; /* Subtle Surfaces */
@@ -233,3 +233,4 @@ input::placeholder, textarea::placeholder {
   to { opacity: 1; transform: translateY(0); }
 }
 .fade-in { animation: fadeIn 0.4s var(--ease-spring); }
+

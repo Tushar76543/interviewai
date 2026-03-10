@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import SpeechRecognition, { useSpeechRecognition } from "react-speech-recognition";
 import NavHeader from "../components/NavHeader";
@@ -18,7 +18,10 @@ interface Feedback {
   technical: number;
   clarity: number;
   completeness: number;
+  overall?: number;
   suggestion: string;
+  strengths?: string[];
+  improvements?: string[];
 }
 
 const ROLE_OPTIONS = [
@@ -57,6 +60,38 @@ const MIN_RECOMMENDED_WORDS = 40;
 const getWordCount = (text: string) => {
   const trimmed = text.trim();
   return trimmed ? trimmed.split(/\s+/).length : 0;
+};
+
+const roundToOneDecimal = (value: number) => Math.round(value * 10) / 10;
+
+const formatElapsedTime = (seconds: number) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+};
+
+const normalizeMultiline = (value: string) => value.replace(/\r/g, "").trim();
+
+const mergeDictationText = (currentAnswer: string, spokenText: string) => {
+  const trimmedCurrent = currentAnswer.trim();
+  const trimmedSpoken = spokenText.trim();
+
+  if (!trimmedSpoken) {
+    return currentAnswer;
+  }
+
+  if (!trimmedCurrent) {
+    return trimmedSpoken;
+  }
+
+  const normalizedCurrent = trimmedCurrent.toLowerCase();
+  const normalizedSpoken = trimmedSpoken.toLowerCase();
+
+  if (normalizedCurrent.endsWith(normalizedSpoken)) {
+    return currentAnswer;
+  }
+
+  return `${trimmedCurrent}\n${trimmedSpoken}`;
 };
 
 const buildGuidedTemplate = (category: string, isTechnicalRole: boolean) => {
@@ -99,10 +134,14 @@ function Interview() {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [autoSpeak, setAutoSpeak] = useState(true);
-  const [timeLeft, setTimeLeft] = useState<number | null>(null);
   const [showCamera, setShowCamera] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [voiceSeed, setVoiceSeed] = useState("");
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const [lastAnswerDurationSec, setLastAnswerDurationSec] = useState<number | null>(null);
+  const [templateNotice, setTemplateNotice] = useState("");
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [voiceError, setVoiceError] = useState("");
 
   const isBusy = isGeneratingQuestion || isSubmittingAnswer;
   const isTechnicalRole = useMemo(
@@ -113,35 +152,94 @@ function Interview() {
   const answerCharCount = answer.trim().length;
   const isAnswerThin = answerWordCount > 0 && answerWordCount < MIN_RECOMMENDED_WORDS;
 
-  const { transcript, listening, resetTranscript, browserSupportsSpeechRecognition } =
-    useSpeechRecognition();
+  const {
+    transcript,
+    finalTranscript,
+    interimTranscript,
+    listening,
+    resetTranscript,
+    browserSupportsSpeechRecognition,
+    isMicrophoneAvailable,
+  } = useSpeechRecognition();
+  const transcriptRef = useRef("");
+
+  const combinedTranscript = useMemo(() => {
+    const fullTranscript = [finalTranscript, interimTranscript]
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .join(" ")
+      .trim();
+
+    return fullTranscript || transcript.trim();
+  }, [finalTranscript, interimTranscript, transcript]);
+  const questionPrompt = question?.prompt ?? "";
+
+  const answerChecklist = useMemo(() => {
+    const lowerAnswer = answer.toLowerCase();
+
+    return [
+      {
+        label: "Clear structure",
+        done: /(first|second|finally|step|approach|situation|task|action|result)/i.test(answer),
+      },
+      {
+        label: "Concrete example or metric",
+        done: /(\d+%|\d+\s?(ms|s|sec|minutes|hours|days)|metric|impact|result|kpi)/i.test(lowerAnswer),
+      },
+      {
+        label: "Trade-offs or alternatives",
+        done: /(trade\s?-?off|alternative|pros|cons|risk|decision)/i.test(lowerAnswer),
+      },
+      {
+        label: "Validation or testing",
+        done: /(test|monitor|validate|rollback|edge case|quality)/i.test(lowerAnswer),
+      },
+    ];
+  }, [answer]);
+
+  const checklistDoneCount = answerChecklist.filter((item) => item.done).length;
 
   useEffect(() => {
-    if (timeLeft === null || timeLeft <= 0) return;
+    transcriptRef.current = combinedTranscript;
+    if (listening) {
+      setLiveTranscript(combinedTranscript);
+    }
+  }, [combinedTranscript, listening]);
 
-    const interval = setInterval(() => {
-      setTimeLeft((prev) => (prev !== null && prev > 0 ? prev - 1 : 0));
+  useEffect(() => {
+    if (!question || !timerRunning) return;
+
+    const intervalId = window.setInterval(() => {
+      setElapsedSeconds((prev) => prev + 1);
     }, 1000);
 
-    return () => clearInterval(interval);
-  }, [timeLeft]);
+    return () => window.clearInterval(intervalId);
+  }, [question, timerRunning]);
 
   useEffect(() => {
-    if (!listening) return;
-    const nextTranscript = transcript.trim();
-    if (!nextTranscript) return;
-    const nextAnswer = voiceSeed ? `${voiceSeed}\n${nextTranscript}` : nextTranscript;
-    setAnswer(nextAnswer);
-  }, [listening, transcript, voiceSeed]);
+    if (!questionPrompt) {
+      setElapsedSeconds(0);
+      setTimerRunning(false);
+      return;
+    }
+
+    setElapsedSeconds(0);
+    setTimerRunning(true);
+    setTemplateNotice("");
+    setVoiceError("");
+    setLiveTranscript("");
+    resetTranscript();
+  }, [questionPrompt, resetTranscript]);
 
   useEffect(() => {
     return () => {
       window.speechSynthesis.cancel();
+      SpeechRecognition.abortListening();
     };
   }, []);
 
   const speak = useCallback((text: string) => {
     window.speechSynthesis.cancel();
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.voice =
       window.speechSynthesis.getVoices().find((voice) => voice.lang.startsWith("en")) || null;
@@ -185,13 +283,17 @@ function Interview() {
     setAnswer("");
     setSessionId(null);
     setHistory([]);
+    setTemplateNotice("");
+    setVoiceError("");
+    setLiveTranscript("");
+    setElapsedSeconds(0);
+    setLastAnswerDurationSec(null);
 
     try {
       const res = await api.post("/interview/start", { role, difficulty, category });
       setQuestion(res.data.question);
       setHistory([res.data.question]);
       setSessionId(res.data.sessionId || null);
-      setTimeLeft(res.data.question?.timeLimitSec || null);
       if (autoSpeak) {
         speak(res.data.question.prompt);
       }
@@ -206,6 +308,10 @@ function Interview() {
     setIsGeneratingQuestion(true);
     setError("");
     setFeedback(null);
+    setTemplateNotice("");
+    setVoiceError("");
+    setLiveTranscript("");
+    setLastAnswerDurationSec(null);
 
     try {
       const res = await api.post("/interview/start", {
@@ -222,7 +328,6 @@ function Interview() {
       setHistory((prev) => [...prev, res.data.question]);
       setSessionId(res.data.sessionId || sessionId);
       setAnswer("");
-      setTimeLeft(res.data.question?.timeLimitSec || null);
       if (autoSpeak) {
         speak(res.data.question.prompt);
       }
@@ -235,7 +340,14 @@ function Interview() {
 
   const submitAnswer = useCallback(async () => {
     if (!question) return;
-    if (!answer.trim()) {
+
+    if (listening) {
+      setError("Stop recording first so your full transcript is captured.");
+      return;
+    }
+
+    const trimmedAnswer = answer.trim();
+    if (!trimmedAnswer) {
       setError("Please write or speak your answer before submitting.");
       return;
     }
@@ -243,18 +355,35 @@ function Interview() {
     setIsSubmittingAnswer(true);
     setFeedback(null);
     setError("");
+    setTemplateNotice("");
+    setTimerRunning(false);
+    setLastAnswerDurationSec(elapsedSeconds);
+
     try {
       const res = await api.post("/interview/feedback", {
         role,
         question: question.prompt,
-        answer,
+        answer: trimmedAnswer,
+        expectedPoints: question.expectedPoints || [],
         sessionId,
       });
 
-      setFeedback(res.data.feedback);
+      const nextFeedback = res.data.feedback as Feedback;
+      const overallFromScores = roundToOneDecimal(
+        (nextFeedback.technical + nextFeedback.clarity + nextFeedback.completeness) / 3
+      );
+
+      setFeedback({
+        ...nextFeedback,
+        overall:
+          typeof nextFeedback.overall === "number" && Number.isFinite(nextFeedback.overall)
+            ? roundToOneDecimal(nextFeedback.overall)
+            : overallFromScores,
+      });
+
       if (autoSpeak) {
         speak(
-          `Scores: technical ${res.data.feedback.technical}, clarity ${res.data.feedback.clarity}, completeness ${res.data.feedback.completeness}. Suggestion: ${res.data.feedback.suggestion}`
+          `Overall ${nextFeedback.overall ?? overallFromScores}. Technical ${nextFeedback.technical}, clarity ${nextFeedback.clarity}, completeness ${nextFeedback.completeness}. ${nextFeedback.suggestion}`
         );
       }
 
@@ -262,12 +391,10 @@ function Interview() {
         const followUpQuestion: Question = {
           ...res.data.followUp,
           category: question.category || category,
-          timeLimitSec: question.timeLimitSec || 120,
         };
 
         setQuestion(followUpQuestion);
         setHistory((prev) => [...prev, followUpQuestion]);
-        setTimeLeft(followUpQuestion.timeLimitSec || null);
         setAnswer("");
       }
     } catch (requestError: unknown) {
@@ -275,7 +402,7 @@ function Interview() {
     } finally {
       setIsSubmittingAnswer(false);
     }
-  }, [answer, autoSpeak, category, question, role, sessionId, speak]);
+  }, [answer, autoSpeak, category, elapsedSeconds, listening, question, role, sessionId, speak]);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -286,35 +413,69 @@ function Interview() {
       if (!isEditorTarget) return;
 
       event.preventDefault();
-      if (!isSubmittingAnswer && !isGeneratingQuestion && answer.trim() && question) {
+      if (!isSubmittingAnswer && !isGeneratingQuestion && answer.trim() && question && !listening) {
         void submitAnswer();
       }
     };
 
     window.addEventListener("keydown", onShortcut);
     return () => window.removeEventListener("keydown", onShortcut);
-  }, [answer, isGeneratingQuestion, isSubmittingAnswer, question, submitAnswer]);
+  }, [answer, isGeneratingQuestion, isSubmittingAnswer, listening, question, submitAnswer]);
 
   const startListening = () => {
-    setVoiceSeed(answer.trim());
+    if (isBusy || listening) return;
+    setVoiceError("");
+    setTemplateNotice("");
+    setError("");
+    setLiveTranscript("");
     resetTranscript();
-    SpeechRecognition.startListening({ continuous: true });
+
+    void SpeechRecognition.startListening({
+      continuous: true,
+      language: "en-US",
+    }).catch(() => {
+      setVoiceError("Could not start microphone. Please allow microphone access and retry.");
+    });
   };
 
   const stopListening = () => {
     SpeechRecognition.stopListening();
+    window.setTimeout(() => {
+      const spokenText = transcriptRef.current.trim();
+      if (!spokenText) {
+        setTemplateNotice("No transcript captured. Try speaking closer to your microphone.");
+        resetTranscript();
+        setLiveTranscript("");
+        return;
+      }
+
+      setAnswer((prev) => mergeDictationText(prev, spokenText));
+      setTemplateNotice("Voice transcript added to your answer.");
+      setLiveTranscript("");
+      resetTranscript();
+    }, 180);
   };
 
   const insertGuidedTemplate = () => {
     const template = buildGuidedTemplate(question?.category || category, isTechnicalRole);
-    setAnswer((prev) => (prev.trim() ? `${prev}\n\n${template}` : template));
+    const normalizedTemplate = normalizeMultiline(template);
+    const normalizedAnswer = normalizeMultiline(answer);
+
+    if (normalizedAnswer.includes(normalizedTemplate)) {
+      setTemplateNotice("Template already exists in your answer.");
+      return;
+    }
+
+    const nextAnswer = normalizedAnswer ? `${answer.trimEnd()}\n\n${template}` : template;
+    setAnswer(nextAnswer);
+    setTemplateNotice("Template inserted once. Fill it with your own points.");
   };
 
   if (!browserSupportsSpeechRecognition) {
     return (
       <div className="interview-container">
         <div className="error-message">
-          Your browser does not support speech recognition. Please use Chrome.
+          Your browser does not support speech recognition. Please use a Chromium-based browser.
         </div>
       </div>
     );
@@ -324,9 +485,9 @@ function Interview() {
     <div className="interview-container">
       <NavHeader />
       <div className="interview-header">
-        <h1>AI Interview Coach</h1>
+        <h1>Interview Practice Workspace</h1>
         <p style={{ color: "var(--slate-500)", marginTop: "var(--space-sm)" }}>
-          Practice realistic interview rounds with broader categories and faster feedback.
+          Practice real interview rounds with live voice capture, structured answers, and detailed feedback.
         </p>
       </div>
 
@@ -361,17 +522,30 @@ function Interview() {
       </div>
 
       {error && <div className="error-message">{error}</div>}
+      {voiceError && <div className="error-message">{voiceError}</div>}
+      {templateNotice && <div className="notice-message">{templateNotice}</div>}
 
       {question && (
         <div className="question-card">
           <div className="question-card-header">
             <h3>Question</h3>
             <div className="question-utils">
-              {timeLeft !== null && timeLeft > 0 && (
-                <span className={`timer ${timeLeft <= 30 ? "timer-warning" : ""}`}>
-                  Time {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, "0")}
-                </span>
-              )}
+              <span className="timer">Elapsed {formatElapsedTime(elapsedSeconds)}</span>
+              <button
+                type="button"
+                className="btn-glass btn-sm"
+                onClick={() => setTimerRunning((prev) => !prev)}
+              >
+                {timerRunning ? "Pause Timer" : "Resume Timer"}
+              </button>
+              <button
+                type="button"
+                className="btn-glass btn-sm"
+                onClick={() => setElapsedSeconds(0)}
+                disabled={elapsedSeconds === 0}
+              >
+                Reset Timer
+              </button>
               <label className="toggle-speak">
                 <input
                   type="checkbox"
@@ -432,7 +606,12 @@ function Interview() {
 
           <div className="voice-controls">
             {!listening ? (
-              <button type="button" onClick={startListening} className="btn-secondary mic-button">
+              <button
+                type="button"
+                onClick={startListening}
+                className="btn-secondary mic-button"
+                disabled={isBusy || isMicrophoneAvailable === false}
+              >
                 Start Speaking
               </button>
             ) : (
@@ -440,10 +619,18 @@ function Interview() {
                 Stop Recording
               </button>
             )}
-            {listening && (
-              <span style={{ color: "var(--danger-600)", fontWeight: 600 }}>Recording...</span>
+            {listening && <span className="recording-status">Recording in progress...</span>}
+            {isMicrophoneAvailable === false && (
+              <span className="recording-status">Microphone access is blocked in this browser.</span>
             )}
           </div>
+
+          {listening && (
+            <div className="live-transcript-card">
+              <p className="live-transcript-label">Live Transcript</p>
+              <p className="live-transcript-text">{liveTranscript || "Listening..."}</p>
+            </div>
+          )}
 
           <div className="answer-area">
             <div className="answer-header">
@@ -453,6 +640,7 @@ function Interview() {
               <div className="answer-meta">
                 <span>{answerWordCount} words</span>
                 <span>{answerCharCount} chars</span>
+                <span>Recorded time: {formatElapsedTime(elapsedSeconds)}</span>
                 <span className="answer-shortcut">Shortcut: Ctrl/Cmd + Enter to submit</span>
               </div>
             </div>
@@ -461,7 +649,14 @@ function Interview() {
               <button type="button" onClick={insertGuidedTemplate} className="btn-glass btn-sm">
                 Insert Guided Template
               </button>
-              <button type="button" onClick={() => setAnswer("")} className="btn-glass btn-sm">
+              <button
+                type="button"
+                onClick={() => {
+                  setAnswer("");
+                  setTemplateNotice("");
+                }}
+                className="btn-glass btn-sm"
+              >
                 Clear Answer
               </button>
               <button
@@ -471,6 +666,22 @@ function Interview() {
               >
                 {showCamera ? "Hide Camera" : "Show Camera"}
               </button>
+            </div>
+
+            <div className="answer-checklist">
+              <div className="answer-checklist-header">
+                <strong>Answer Quality Checklist</strong>
+                <span>
+                  {checklistDoneCount}/{answerChecklist.length}
+                </span>
+              </div>
+              <ul>
+                {answerChecklist.map((item) => (
+                  <li key={item.label} className={item.done ? "check-done" : "check-pending"}>
+                    {item.done ? "Complete" : "Pending"} - {item.label}
+                  </li>
+                ))}
+              </ul>
             </div>
 
             {isAnswerThin && (
@@ -525,7 +736,7 @@ function Interview() {
             <button
               type="button"
               onClick={submitAnswer}
-              disabled={isBusy || !answer.trim()}
+              disabled={isBusy || !answer.trim() || listening}
               className="btn-secondary"
             >
               {isSubmittingAnswer ? "Analyzing..." : "Submit Answer"}
@@ -539,6 +750,14 @@ function Interview() {
           <h3 className="feedback-title">Feedback Summary</h3>
 
           <div className="score-grid">
+            <div className="score-item overall-score-item">
+              <div className="score-label">Overall</div>
+              <div className="score-value">{feedback.overall}/10</div>
+              <div className="score-bar">
+                <div className="score-fill" style={{ width: `${((feedback.overall || 0) / 10) * 100}%` }} />
+              </div>
+            </div>
+
             <div className="score-item">
               <div className="score-label">Technical</div>
               <div className="score-value">{feedback.technical}/10</div>
@@ -567,8 +786,38 @@ function Interview() {
             </div>
           </div>
 
+          {lastAnswerDurationSec !== null && (
+            <p className="feedback-timing">Recorded answer time: {formatElapsedTime(lastAnswerDurationSec)}</p>
+          )}
+
+          {(feedback.strengths?.length || feedback.improvements?.length) && (
+            <div className="feedback-lists">
+              {feedback.strengths && feedback.strengths.length > 0 && (
+                <div className="feedback-list-card">
+                  <h4>Strengths</h4>
+                  <ul>
+                    {feedback.strengths.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {feedback.improvements && feedback.improvements.length > 0 && (
+                <div className="feedback-list-card">
+                  <h4>Improve Next</h4>
+                  <ul>
+                    {feedback.improvements.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="suggestion-box">
-            <strong style={{ color: "var(--primary-600)" }}>Suggestion:</strong>
+            <strong style={{ color: "var(--primary-600)" }}>Next action:</strong>
             <p style={{ marginTop: "var(--space-sm)", color: "var(--slate-700)" }}>{feedback.suggestion}</p>
           </div>
         </div>

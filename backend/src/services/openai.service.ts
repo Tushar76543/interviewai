@@ -360,7 +360,12 @@ Return JSON only in this format:
 
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
-      throw new AiProviderError("AI_BAD_RESPONSE", "AI provider returned an empty response", 502);
+      return buildFallbackQuestion(
+        safeRole,
+        resolvedDifficulty,
+        resolvedCategory,
+        safePrevious.length
+      );
     }
 
     const parsed = parseQuestion(text, resolvedCategory, resolvedDifficulty);

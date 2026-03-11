@@ -71,6 +71,13 @@ export const feedbackRateLimit = createRateLimiter({
   message: "Too many feedback requests. Please slow down.",
 });
 
+export const feedbackPollRateLimit = createRateLimiter({
+  bucket: "rl:feedback-poll",
+  windowMs: 60 * 1000,
+  max: 120,
+  message: "Too many evaluation status checks. Please slow down.",
+});
+
 export const resumeRateLimit = createRateLimiter({
   bucket: "rl:resume",
   windowMs: 5 * 60 * 1000,

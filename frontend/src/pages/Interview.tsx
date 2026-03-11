@@ -22,6 +22,28 @@ interface Feedback {
   suggestion: string;
   strengths?: string[];
   improvements?: string[];
+  source?: "heuristic" | "ai_calibrated";
+  provisional?: boolean;
+}
+
+interface FeedbackJobCreateResponse {
+  jobId: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  pollAfterMs?: number;
+  provisionalFeedback?: Feedback;
+  provisionalFollowUp?: Question | null;
+}
+
+interface FeedbackJobStatusResponse {
+  jobId: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  pollAfterMs?: number;
+  provisionalFeedback?: Feedback;
+  result?: {
+    feedback: Feedback;
+    followUp?: Question | null;
+    source?: "heuristic" | "ai_calibrated";
+  };
 }
 
 const ROLE_OPTIONS = [
@@ -70,6 +92,11 @@ const getWordCount = (text: string) => {
 
 const roundToOneDecimal = (value: number) => Math.round(value * 10) / 10;
 
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+
 const formatElapsedTime = (seconds: number) => {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
@@ -77,6 +104,25 @@ const formatElapsedTime = (seconds: number) => {
 };
 
 const normalizeMultiline = (value: string) => value.replace(/\r/g, "").trim();
+
+const normalizeFeedbackScores = (
+  feedback: Feedback,
+  options?: { source?: "heuristic" | "ai_calibrated"; provisional?: boolean }
+) => {
+  const overallFromScores = roundToOneDecimal(
+    (feedback.technical + feedback.clarity + feedback.completeness) / 3
+  );
+
+  return {
+    ...feedback,
+    overall:
+      typeof feedback.overall === "number" && Number.isFinite(feedback.overall)
+        ? roundToOneDecimal(feedback.overall)
+        : overallFromScores,
+    source: options?.source ?? feedback.source,
+    provisional: options?.provisional ?? false,
+  };
+};
 
 const mergeDictationText = (currentAnswer: string, spokenText: string) => {
   const trimmedCurrent = currentAnswer.trim();
@@ -160,13 +206,16 @@ function Interview() {
   const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
   const [recordingUrl, setRecordingUrl] = useState("");
   const [recordingDurationSec, setRecordingDurationSec] = useState(0);
+  const [isEvaluationPending, setIsEvaluationPending] = useState(false);
+  const [evaluationStatusText, setEvaluationStatusText] = useState("");
+  const [evaluationJobId, setEvaluationJobId] = useState<string | null>(null);
 
   const webcamRef = useRef<Webcam | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
   const recordingStartRef = useRef<number | null>(null);
 
-  const isBusy = isGeneratingQuestion || isSubmittingAnswer;
+  const isBusy = isGeneratingQuestion || isSubmittingAnswer || isEvaluationPending;
   const isTechnicalRole = useMemo(
     () => /(engineer|developer|ai|ml|data scientist|qa|sre|devops|architect)/i.test(role),
     [role]
@@ -268,6 +317,9 @@ function Interview() {
     setLiveTranscript("");
     setSpeechTranscriptLog("");
     setVoiceModeActive(false);
+    setIsEvaluationPending(false);
+    setEvaluationStatusText("");
+    setEvaluationJobId(null);
     SpeechRecognition.stopListening();
     resetTranscript();
     const recorder = mediaRecorderRef.current;
@@ -354,6 +406,9 @@ function Interview() {
     setSpeechTranscriptLog("");
     setElapsedSeconds(0);
     setLastAnswerDurationSec(null);
+    setIsEvaluationPending(false);
+    setEvaluationStatusText("");
+    setEvaluationJobId(null);
 
     try {
       const res = await api.post("/interview/start", { role, difficulty, category }, { timeout: 12000 });
@@ -380,6 +435,9 @@ function Interview() {
     setVoiceModeActive(false);
     setSpeechTranscriptLog("");
     setLastAnswerDurationSec(null);
+    setIsEvaluationPending(false);
+    setEvaluationStatusText("");
+    setEvaluationJobId(null);
 
     try {
       const res = await api.post("/interview/start", {
@@ -535,6 +593,53 @@ function Interview() {
     });
   }, [recordingBlob, sessionId]);
 
+  const pollFeedbackJob = useCallback(async (jobId: string, initialPollAfterMs: number) => {
+    let delayMs = Math.max(450, Math.min(2600, initialPollAfterMs || 1200));
+    const maxAttempts = 18;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0) {
+        await sleep(delayMs);
+      }
+
+      setEvaluationStatusText(`Evaluating answer... (${attempt + 1}/${maxAttempts})`);
+
+      try {
+        const statusRes = await api.get(`/interview/feedback/jobs/${jobId}`, { timeout: 9000 });
+        const payload = statusRes.data as FeedbackJobStatusResponse;
+
+        if (payload.status === "completed" && payload.result?.feedback) {
+          return payload.result;
+        }
+
+        if (payload.status === "failed") {
+          throw new Error("Evaluation job failed. Please submit again.");
+        }
+
+        if (payload.provisionalFeedback) {
+          setFeedback((prev) => {
+            if (prev && !prev.provisional) {
+              return prev;
+            }
+            return normalizeFeedbackScores(payload.provisionalFeedback as Feedback, {
+              source: "heuristic",
+              provisional: true,
+            });
+          });
+        }
+
+        delayMs = Math.max(450, Math.min(2600, payload.pollAfterMs ?? delayMs + 250));
+      } catch (pollError) {
+        if (attempt >= maxAttempts - 1) {
+          throw pollError;
+        }
+        delayMs = Math.min(2800, delayMs + 350);
+      }
+    }
+
+    throw new Error("Evaluation is taking longer than expected. Please retry.");
+  }, []);
+
   const submitAnswer = useCallback(async () => {
     if (!question) return;
 
@@ -550,6 +655,9 @@ function Interview() {
     }
 
     setIsSubmittingAnswer(true);
+    setIsEvaluationPending(false);
+    setEvaluationStatusText("");
+    setEvaluationJobId(null);
     setFeedback(null);
     setError("");
     setTemplateNotice("");
@@ -558,6 +666,7 @@ function Interview() {
     const speechTranscript = cleanTranscriptText(speechTranscriptLog || transcriptRef.current);
     const answerDurationSec = Math.max(0, Math.round(elapsedSeconds));
     const cameraSnapshot = captureCameraSnapshot();
+    let hasProvisionalFeedback = false;
 
     try {
       setRecordingError("");
@@ -569,7 +678,7 @@ function Interview() {
         }
       }
 
-      const res = await api.post("/interview/feedback", {
+      const createJobResponse = await api.post("/interview/feedback/jobs", {
         role,
         question: question.prompt,
         answer: trimmedAnswer,
@@ -578,30 +687,44 @@ function Interview() {
         answerDurationSec,
         cameraSnapshot: cameraSnapshot || undefined,
         sessionId,
-      }, { timeout: 12000 });
+      }, { timeout: 9000 });
 
-      const nextFeedback = res.data.feedback as Feedback;
-      const overallFromScores = roundToOneDecimal(
-        (nextFeedback.technical + nextFeedback.clarity + nextFeedback.completeness) / 3
-      );
+      const jobPayload = createJobResponse.data as FeedbackJobCreateResponse;
+      if (!jobPayload.jobId) {
+        throw new Error("Evaluation job did not start. Please retry.");
+      }
 
-      setFeedback({
-        ...nextFeedback,
-        overall:
-          typeof nextFeedback.overall === "number" && Number.isFinite(nextFeedback.overall)
-            ? roundToOneDecimal(nextFeedback.overall)
-            : overallFromScores,
-      });
+      setEvaluationJobId(jobPayload.jobId);
+      setIsEvaluationPending(true);
+      setEvaluationStatusText("Evaluating your answer...");
 
-      if (autoSpeak) {
-        speak(
-          `Overall ${nextFeedback.overall ?? overallFromScores}. Technical ${nextFeedback.technical}, clarity ${nextFeedback.clarity}, completeness ${nextFeedback.completeness}. ${nextFeedback.suggestion}`
+      if (jobPayload.provisionalFeedback) {
+        hasProvisionalFeedback = true;
+        setFeedback(
+          normalizeFeedbackScores(jobPayload.provisionalFeedback, {
+            source: "heuristic",
+            provisional: true,
+          })
         );
       }
 
-      if (res.data.followUp) {
+      const finalResult = await pollFeedbackJob(jobPayload.jobId, jobPayload.pollAfterMs ?? 1200);
+      const nextFeedback = normalizeFeedbackScores(finalResult.feedback, {
+        source: finalResult.source ?? finalResult.feedback.source ?? "heuristic",
+        provisional: false,
+      });
+
+      setFeedback(nextFeedback);
+
+      if (autoSpeak) {
+        speak(
+          `Overall ${nextFeedback.overall}. Technical ${nextFeedback.technical}, clarity ${nextFeedback.clarity}, completeness ${nextFeedback.completeness}. ${nextFeedback.suggestion}`
+        );
+      }
+
+      if (finalResult.followUp) {
         const followUpQuestion: Question = {
-          ...res.data.followUp,
+          ...finalResult.followUp,
           category: question.category || category,
         };
 
@@ -610,9 +733,17 @@ function Interview() {
         setAnswer("");
       }
     } catch (requestError: unknown) {
-      setError(extractApiErrorMessage(requestError, "Could not get feedback."));
+      const baseMessage = extractApiErrorMessage(requestError, "Could not get feedback.");
+      if (hasProvisionalFeedback) {
+        setError(`${baseMessage} Preliminary feedback is shown while final evaluation catches up.`);
+      } else {
+        setError(baseMessage);
+      }
     } finally {
       setIsSubmittingAnswer(false);
+      setIsEvaluationPending(false);
+      setEvaluationStatusText("");
+      setEvaluationJobId(null);
     }
   }, [
     answer,
@@ -627,6 +758,7 @@ function Interview() {
     sessionId,
     speak,
     speechTranscriptLog,
+    pollFeedbackJob,
     uploadRecordingIfNeeded,
   ]);
 
@@ -757,6 +889,17 @@ function Interview() {
       {recordingError && <div className="error-message">{recordingError}</div>}
       {templateNotice && <div className="notice-message">{templateNotice}</div>}
       {recordingStatus && <div className="notice-message">{recordingStatus}</div>}
+      {isEvaluationPending && (
+        <div className="notice-message">
+          {evaluationStatusText || "Evaluating your answer..."}
+          {evaluationJobId ? ` Job: ${evaluationJobId.slice(0, 8)}...` : ""}
+        </div>
+      )}
+      {feedback?.provisional && (
+        <div className="notice-message">
+          Preliminary feedback is shown now. Final calibrated feedback will replace it automatically.
+        </div>
+      )}
 
       {question && (
         <div className="question-card">
@@ -1028,7 +1171,7 @@ function Interview() {
               disabled={isBusy || !answer.trim() || listening}
               className="btn-secondary"
             >
-              {isSubmittingAnswer ? "Analyzing..." : "Submit Answer"}
+              {isSubmittingAnswer ? "Submitting..." : isEvaluationPending ? "Evaluating..." : "Submit Answer"}
             </button>
           </div>
         </div>
@@ -1078,6 +1221,14 @@ function Interview() {
           {lastAnswerDurationSec !== null && (
             <p className="feedback-timing">Recorded answer time: {formatElapsedTime(lastAnswerDurationSec)}</p>
           )}
+
+          <p className="feedback-timing">
+            {feedback.provisional
+              ? "Evaluation status: preliminary heuristic scoring."
+              : feedback.source === "ai_calibrated"
+                ? "Evaluation source: AI + calibration guardrails."
+                : "Evaluation source: calibrated heuristic fallback."}
+          </p>
 
           {(feedback.strengths?.length || feedback.improvements?.length) && (
             <div className="feedback-lists">

@@ -714,7 +714,7 @@ var init_rateLimitStore = __esm({
 });
 
 // backend/src/middleware/rateLimit.middleware.ts
-var rateLimitStore, getClientKey, createRateLimiter, authRateLimit, interviewRateLimit, feedbackRateLimit, resumeRateLimit, recordingRateLimit;
+var rateLimitStore, getClientKey, createRateLimiter, authRateLimit, interviewRateLimit, feedbackRateLimit, feedbackPollRateLimit, resumeRateLimit, recordingRateLimit;
 var init_rateLimit_middleware = __esm({
   "backend/src/middleware/rateLimit.middleware.ts"() {
     "use strict";
@@ -771,6 +771,12 @@ var init_rateLimit_middleware = __esm({
       windowMs: 60 * 1e3,
       max: 25,
       message: "Too many feedback requests. Please slow down."
+    });
+    feedbackPollRateLimit = createRateLimiter({
+      bucket: "rl:feedback-poll",
+      windowMs: 60 * 1e3,
+      max: 120,
+      message: "Too many evaluation status checks. Please slow down."
     });
     resumeRateLimit = createRateLimiter({
       bucket: "rl:resume",
@@ -872,22 +878,25 @@ var init_interview_routes = __esm({
 
 // backend/src/services/feedback.service.ts
 import axios2 from "axios";
-async function generateFeedback(role, question, answer, expectedPoints = []) {
+async function generateFeedback(role, question, answer, expectedPoints = [], options = {}) {
+  const heuristicResult = generateHeuristicFeedback(role, question, answer, expectedPoints);
+  const heuristics = buildHeuristicAssessment(
+    cleanText2(question, 1e3),
+    cleanText2(answer, 5e3),
+    expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText2(item, 200)).filter(Boolean).slice(0, 8)
+  );
+  if (options.skipProvider || heuristics.lowConfidence || heuristics.wordCount < 8) {
+    return heuristicResult;
+  }
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
-    throw new Error("AI provider is not configured");
+    return heuristicResult;
   }
   const safeRole = cleanText2(role, 80);
   const safeQuestion = cleanText2(question, 1e3);
   const safeAnswer = cleanText2(answer, 5e3);
   const safeExpectedPoints = expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText2(item, 200)).filter(Boolean).slice(0, 8);
-  const heuristics = buildHeuristicAssessment(safeQuestion, safeAnswer, safeExpectedPoints);
-  if (heuristics.lowConfidence || heuristics.wordCount < 8) {
-    return {
-      feedback: heuristics.feedback,
-      followUp: heuristics.followUp
-    };
-  }
+  const requestTimeoutMs = Number.isFinite(options.providerTimeoutMs) ? Math.max(2e3, Math.min(9e3, Number(options.providerTimeoutMs))) : DEFAULT_REQUEST_TIMEOUT_MS;
   const expectedPointsGuidance = safeExpectedPoints.length ? `Expected points:
 - ${safeExpectedPoints.join("\n- ")}` : "Expected points were not supplied.";
   const prompt = `
@@ -901,6 +910,7 @@ Score this answer from 0 to 10 in:
 Important:
 - Penalize incorrect facts and missing key concepts.
 - Do not give high technical/completeness scores when core points are wrong or missing.
+- If the answer is generic or off-topic, keep technical/completeness low.
 - Keep output concise and specific.
 
 ${expectedPointsGuidance}
@@ -940,7 +950,7 @@ Answer: ${safeAnswer}
         max_tokens: RESPONSE_MAX_TOKENS2
       },
       {
-        timeout: REQUEST_TIMEOUT_MS2,
+        timeout: requestTimeoutMs,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "HTTP-Referer": referer,
@@ -951,21 +961,16 @@ Answer: ${safeAnswer}
     );
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
-      return {
-        feedback: heuristics.feedback,
-        followUp: heuristics.followUp
-      };
+      return heuristicResult;
     }
     const parsed = parseFeedback(text);
     if (!parsed) {
-      return {
-        feedback: heuristics.feedback,
-        followUp: heuristics.followUp
-      };
+      return heuristicResult;
     }
     return {
       feedback: calibrateFeedback(parsed.feedback, heuristics),
-      followUp: parsed.followUp || heuristics.followUp
+      followUp: parsed.followUp || heuristicResult.followUp,
+      source: "ai_calibrated"
     };
   } catch (error) {
     if (axios2.isAxiosError(error)) {
@@ -974,19 +979,16 @@ Answer: ${safeAnswer}
         code: error.code
       });
     }
-    return {
-      feedback: heuristics.feedback,
-      followUp: heuristics.followUp
-    };
+    return heuristicResult;
   }
 }
-var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, REQUEST_TIMEOUT_MS2, RESPONSE_MAX_TOKENS2, STOP_WORDS, cleanText2, normalizeText, clampScore, roundToOneDecimal, extractJson2, sanitizeList, hasLowConfidenceLanguage, matchesExpectedPoint, buildHeuristicAssessment, calibrateFeedback, parseFeedback;
+var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, DEFAULT_REQUEST_TIMEOUT_MS, RESPONSE_MAX_TOKENS2, STOP_WORDS, cleanText2, normalizeText, clampScore, roundToOneDecimal, extractJson2, sanitizeList, toMeaningfulTokens, uniqueRatio, extractKeywords, topicalityScore, hasLowConfidenceLanguage, matchesExpectedPoint, buildHeuristicAssessment, calibrateFeedback, parseFeedback, generateHeuristicFeedback;
 var init_feedback_service = __esm({
   "backend/src/services/feedback.service.ts"() {
     "use strict";
     OPENROUTER_ENDPOINT2 = "https://openrouter.ai/api/v1/chat/completions";
     DEFAULT_MODEL2 = "meta-llama/llama-3.1-8b-instruct:free";
-    REQUEST_TIMEOUT_MS2 = 7e3;
+    DEFAULT_REQUEST_TIMEOUT_MS = Number.parseInt(process.env.FEEDBACK_PROVIDER_TIMEOUT_MS ?? "5200", 10);
     RESPONSE_MAX_TOKENS2 = 450;
     STOP_WORDS = /* @__PURE__ */ new Set([
       "the",
@@ -1002,7 +1004,32 @@ var init_feedback_service = __esm({
       "would",
       "there",
       "their",
-      "should"
+      "should",
+      "were",
+      "then",
+      "they",
+      "them",
+      "been",
+      "over",
+      "only",
+      "also",
+      "just",
+      "some",
+      "when",
+      "what",
+      "where",
+      "while",
+      "which",
+      "through",
+      "because",
+      "could",
+      "being",
+      "very",
+      "more",
+      "than",
+      "will",
+      "each",
+      "other"
     ]);
     cleanText2 = (value, maxLength) => value.replace(/\s+/g, " ").trim().slice(0, maxLength);
     normalizeText = (value) => value.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -1022,6 +1049,27 @@ var init_feedback_service = __esm({
     sanitizeList = (value, maxItems, itemMaxLength) => {
       if (!Array.isArray(value)) return [];
       return value.filter((item) => typeof item === "string").map((item) => cleanText2(item, itemMaxLength)).filter(Boolean).slice(0, maxItems);
+    };
+    toMeaningfulTokens = (value) => normalizeText(value).split(" ").map((token) => token.trim()).filter((token) => token.length > 2 && !STOP_WORDS.has(token));
+    uniqueRatio = (tokens) => {
+      if (tokens.length === 0) return 1;
+      return new Set(tokens).size / tokens.length;
+    };
+    extractKeywords = (value, maxItems) => {
+      const counts = /* @__PURE__ */ new Map();
+      for (const token of toMeaningfulTokens(value)) {
+        counts.set(token, (counts.get(token) ?? 0) + 1);
+      }
+      return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([token]) => token).slice(0, maxItems);
+    };
+    topicalityScore = (question, answer) => {
+      const questionKeywords = extractKeywords(question, 16);
+      if (questionKeywords.length === 0) {
+        return 0.5;
+      }
+      const answerTokenSet = new Set(toMeaningfulTokens(answer));
+      const overlapCount = questionKeywords.filter((token) => answerTokenSet.has(token)).length;
+      return overlapCount / questionKeywords.length;
     };
     hasLowConfidenceLanguage = (answer) => /\b(i\s+(don'?t|do not|can'?t|cannot|am not sure)|not sure|no idea|idk|just guessing)\b/i.test(
       answer
@@ -1044,41 +1092,65 @@ var init_feedback_service = __esm({
       const normalizedAnswer = normalizeText(answer);
       const wordCount = normalizedAnswer ? normalizedAnswer.split(" ").length : 0;
       const lowConfidence = hasLowConfidenceLanguage(answer);
+      const topicalityRatio = topicalityScore(question, answer);
+      const answerTokens = toMeaningfulTokens(answer);
+      const repeatedLanguage = wordCount >= 24 && uniqueRatio(answerTokens) < 0.42;
       const matchedPoints = expectedPoints.filter(
         (point) => matchesExpectedPoint(point, normalizedAnswer)
       );
       const missingPoints = expectedPoints.filter((point) => !matchedPoints.includes(point));
-      const coverageRatio = expectedPoints.length > 0 ? matchedPoints.length / expectedPoints.length : 0.5;
-      let technical = expectedPoints.length > 0 ? 1.5 + coverageRatio * 7.5 : 2.5 + Math.min(wordCount, 160) / 28;
-      let completeness = expectedPoints.length > 0 ? 1.2 + coverageRatio * 8 : 2.2 + Math.min(wordCount, 160) / 30;
-      let clarity = 2 + Math.min(wordCount, 180) / 35;
-      if (wordCount < 40) {
-        clarity -= 0.6;
+      const coverageRatio = expectedPoints.length > 0 ? matchedPoints.length / expectedPoints.length : 0;
+      let technical = 2.2;
+      let completeness = 2.2;
+      let clarity = 2.6 + Math.min(wordCount, 180) / 36;
+      if (expectedPoints.length > 0) {
+        technical = 1.4 + coverageRatio * 7.6;
+        completeness = 1.2 + coverageRatio * 8.1;
+      } else {
+        const topicalityBoost = topicalityRatio * 5.1;
+        technical = 1.8 + topicalityBoost + Math.min(wordCount, 140) / 70;
+        completeness = 1.7 + topicalityBoost + Math.min(wordCount, 140) / 72;
       }
-      if (wordCount < 20) {
-        technical = Math.min(technical, 4.2);
-        completeness = Math.min(completeness, 4);
-        clarity = Math.min(clarity, 5);
+      if (wordCount < 45) {
+        clarity -= 0.7;
       }
-      if (wordCount < 10) {
-        technical = Math.min(technical, 2.8);
-        completeness = Math.min(completeness, 2.6);
-        clarity = Math.min(clarity, 4);
+      if (wordCount < 22) {
+        technical = Math.min(technical, 4.3);
+        completeness = Math.min(completeness, 4.1);
+        clarity = Math.min(clarity, 5.1);
       }
-      if (lowConfidence) {
-        technical = Math.min(technical, 2.5);
-        completeness = Math.min(completeness, 2.5);
-        clarity = Math.min(clarity, 4.5);
+      if (wordCount < 12) {
+        technical = Math.min(technical, 2.9);
+        completeness = Math.min(completeness, 2.8);
+        clarity = Math.min(clarity, 4.2);
       }
       if (expectedPoints.length >= 2) {
-        if (coverageRatio < 0.35) {
+        if (coverageRatio < 0.34) {
           technical = Math.min(technical, 4.8);
           completeness = Math.min(completeness, 4.6);
         }
         if (coverageRatio === 0) {
-          technical = Math.min(technical, 2.8);
-          completeness = Math.min(completeness, 2.5);
+          technical = Math.min(technical, 2.9);
+          completeness = Math.min(completeness, 2.7);
         }
+      }
+      if (topicalityRatio < 0.22) {
+        technical = Math.min(technical, 4.2);
+        completeness = Math.min(completeness, 4);
+      }
+      if (topicalityRatio < 0.1) {
+        technical = Math.min(technical, 3.2);
+        completeness = Math.min(completeness, 3);
+      }
+      if (repeatedLanguage) {
+        technical = Math.min(technical, 3.4);
+        completeness = Math.min(completeness, 3.3);
+        clarity = Math.min(clarity, 4.8);
+      }
+      if (lowConfidence) {
+        technical = Math.min(technical, 2.5);
+        completeness = Math.min(completeness, 2.6);
+        clarity = Math.min(clarity, 4.5);
       }
       technical = clampScore(technical);
       clarity = clampScore(clarity);
@@ -1086,12 +1158,21 @@ var init_feedback_service = __esm({
       const overall = clampScore(
         roundToOneDecimal(technical * 0.5 + clarity * 0.2 + completeness * 0.3)
       );
+      let confidenceBand = "high";
+      if (lowConfidence || repeatedLanguage || wordCount < 20 || topicalityRatio < 0.2 || expectedPoints.length >= 2 && coverageRatio === 0) {
+        confidenceBand = "low";
+      } else if (topicalityRatio < 0.42 || expectedPoints.length >= 2 && coverageRatio < 0.6) {
+        confidenceBand = "medium";
+      }
       const strengths = [];
       if (clarity >= 6) {
         strengths.push("Your response is easy to follow.");
       }
       if (wordCount >= 35) {
         strengths.push("You provided enough detail for meaningful evaluation.");
+      }
+      if (topicalityRatio >= 0.45) {
+        strengths.push("You stayed relevant to the exact question.");
       }
       if (matchedPoints.length > 0) {
         strengths.push(
@@ -1102,6 +1183,9 @@ var init_feedback_service = __esm({
         strengths.push("You attempted the question and gave an initial direction.");
       }
       const improvements = [];
+      if (topicalityRatio < 0.28) {
+        improvements.push("Stay closer to the exact question and avoid generic statements.");
+      }
       if (missingPoints.length > 0) {
         improvements.push(`Address these missing points: ${missingPoints.join("; ")}.`);
       }
@@ -1135,23 +1219,22 @@ var init_feedback_service = __esm({
         coverageRatio,
         expectedPointCount: expectedPoints.length,
         lowConfidence,
-        wordCount
+        wordCount,
+        topicalityRatio,
+        repeatedLanguage,
+        confidenceBand
       };
     };
     calibrateFeedback = (aiFeedback, heuristics) => {
-      const calibratedTechnical = clampScore(
-        Math.min(aiFeedback.technical, heuristics.feedback.technical + 1.2)
+      const technicalHeadroom = heuristics.confidenceBand === "high" ? 1.1 : 0.6;
+      const completenessHeadroom = heuristics.confidenceBand === "high" ? 1.1 : 0.6;
+      const clarityHeadroom = heuristics.confidenceBand === "low" ? 0.8 : 1.4;
+      let technical = clampScore(Math.min(aiFeedback.technical, heuristics.feedback.technical + technicalHeadroom));
+      let completeness = clampScore(
+        Math.min(aiFeedback.completeness, heuristics.feedback.completeness + completenessHeadroom)
       );
-      const calibratedCompleteness = clampScore(
-        Math.min(aiFeedback.completeness, heuristics.feedback.completeness + 1.2)
-      );
-      const calibratedClarity = clampScore(
-        Math.min(aiFeedback.clarity, heuristics.feedback.clarity + 1.5)
-      );
-      let technical = calibratedTechnical;
-      let completeness = calibratedCompleteness;
-      let clarity = calibratedClarity;
-      if (heuristics.expectedPointCount >= 2 && heuristics.coverageRatio < 0.35) {
+      let clarity = clampScore(Math.min(aiFeedback.clarity, heuristics.feedback.clarity + clarityHeadroom));
+      if (heuristics.expectedPointCount >= 2 && heuristics.coverageRatio < 0.34) {
         technical = Math.min(technical, 5);
         completeness = Math.min(completeness, 5);
       }
@@ -1162,6 +1245,23 @@ var init_feedback_service = __esm({
       if (heuristics.lowConfidence || heuristics.wordCount < 12) {
         technical = Math.min(technical, 3.5);
         completeness = Math.min(completeness, 3.5);
+      }
+      if (heuristics.topicalityRatio < 0.22) {
+        technical = Math.min(technical, 4.3);
+        completeness = Math.min(completeness, 4.1);
+      }
+      if (heuristics.topicalityRatio < 0.12) {
+        technical = Math.min(technical, 3.3);
+        completeness = Math.min(completeness, 3.2);
+      }
+      if (heuristics.repeatedLanguage) {
+        technical = Math.min(technical, 3.5);
+        completeness = Math.min(completeness, 3.4);
+        clarity = Math.min(clarity, 5);
+      }
+      if (heuristics.confidenceBand === "low") {
+        technical = Math.min(technical, 5);
+        completeness = Math.min(completeness, 5);
       }
       technical = clampScore(technical);
       clarity = clampScore(clarity);
@@ -1214,21 +1314,390 @@ var init_feedback_service = __esm({
         return null;
       }
     };
+    generateHeuristicFeedback = (role, question, answer, expectedPoints = []) => {
+      const safeRole = cleanText2(role || "Software Engineer", 80);
+      const safeQuestion = cleanText2(question, 1e3);
+      const safeAnswer = cleanText2(answer, 5e3);
+      const safeExpectedPoints = expectedPoints.filter((item) => typeof item === "string").map((item) => cleanText2(item, 200)).filter(Boolean).slice(0, 8);
+      const heuristics = buildHeuristicAssessment(safeQuestion, safeAnswer, safeExpectedPoints);
+      return {
+        feedback: {
+          ...heuristics.feedback,
+          suggestion: heuristics.feedback.suggestion || `Keep your answer for ${safeRole} focused on technical correctness and concrete examples.`
+        },
+        followUp: heuristics.followUp,
+        source: "heuristic"
+      };
+    };
+  }
+});
+
+// backend/src/models/feedbackJob.ts
+import mongoose3, { Schema as Schema3 } from "mongoose";
+var FollowUpSchema, FeedbackBreakdownSchema, FeedbackJobSchema, feedbackJob_default;
+var init_feedbackJob = __esm({
+  "backend/src/models/feedbackJob.ts"() {
+    "use strict";
+    FollowUpSchema = new Schema3(
+      {
+        qid: { type: String, maxlength: 40 },
+        prompt: { type: String, maxlength: 1e3 },
+        expectedPoints: [{ type: String, maxlength: 240 }]
+      },
+      { _id: false }
+    );
+    FeedbackBreakdownSchema = new Schema3(
+      {
+        technical: { type: Number, min: 0, max: 10 },
+        clarity: { type: Number, min: 0, max: 10 },
+        completeness: { type: Number, min: 0, max: 10 },
+        overall: { type: Number, min: 0, max: 10 },
+        suggestion: { type: String, maxlength: 420 },
+        strengths: [{ type: String, maxlength: 160 }],
+        improvements: [{ type: String, maxlength: 160 }]
+      },
+      { _id: false }
+    );
+    FeedbackJobSchema = new Schema3(
+      {
+        userId: { type: Schema3.Types.ObjectId, ref: "User", required: true, index: true },
+        sessionId: { type: Schema3.Types.ObjectId, ref: "InterviewSession" },
+        sessionQuestionIndex: { type: Number, min: 0, max: 200 },
+        role: { type: String, required: true, maxlength: 80 },
+        question: { type: String, required: true, maxlength: 1e3 },
+        answer: { type: String, required: true, maxlength: 5e3 },
+        expectedPoints: { type: [String], default: [] },
+        speechTranscript: { type: String, maxlength: 5e3 },
+        answerDurationSec: { type: Number, min: 0, max: 7200 },
+        cameraSnapshot: { type: String, maxlength: 45e4 },
+        status: {
+          type: String,
+          enum: ["pending", "processing", "completed", "failed"],
+          default: "pending",
+          required: true,
+          index: true
+        },
+        attempts: { type: Number, default: 0, min: 0 },
+        processingStartedAt: { type: Date },
+        lastError: { type: String, maxlength: 280 },
+        provisionalFeedback: { type: FeedbackBreakdownSchema },
+        provisionalFollowUp: { type: FollowUpSchema, default: null },
+        result: {
+          feedback: { type: FeedbackBreakdownSchema },
+          followUp: { type: FollowUpSchema, default: null },
+          source: { type: String, enum: ["heuristic", "ai_calibrated"] }
+        },
+        expiresAt: {
+          type: Date,
+          default: () => new Date(Date.now() + 1e3 * 60 * 60 * 24),
+          index: true
+        }
+      },
+      { timestamps: true }
+    );
+    FeedbackJobSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+    FeedbackJobSchema.index({ userId: 1, createdAt: -1 });
+    FeedbackJobSchema.index({ status: 1, processingStartedAt: 1 });
+    feedbackJob_default = mongoose3.models.FeedbackJob || mongoose3.model("FeedbackJob", FeedbackJobSchema);
+  }
+});
+
+// backend/src/services/feedbackJob.service.ts
+import mongoose4 from "mongoose";
+var JOB_PROCESS_STALE_MS, JOB_PROVIDER_TIMEOUT_MS, normalizedText, resolveTargetQuestionIndex, persistFeedbackToSession, resolveSessionQuestionIndex, createFeedbackJob, claimFeedbackJob, processFeedbackJob, getFeedbackJob, getFeedbackJobStatus, startFeedbackJobProcessing, mapJobToApiResponse;
+var init_feedbackJob_service = __esm({
+  "backend/src/services/feedbackJob.service.ts"() {
+    "use strict";
+    init_feedbackJob();
+    init_interviewSession();
+    init_feedback_service();
+    JOB_PROCESS_STALE_MS = 3e4;
+    JOB_PROVIDER_TIMEOUT_MS = 5200;
+    normalizedText = (value) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    resolveTargetQuestionIndex = (questions, question, preferredIndex) => {
+      const normalizedQuestion = normalizedText(question);
+      if (typeof preferredIndex === "number" && preferredIndex >= 0 && preferredIndex < questions.length && normalizedText(questions[preferredIndex].question) === normalizedQuestion) {
+        return preferredIndex;
+      }
+      for (let index = questions.length - 1; index >= 0; index -= 1) {
+        if (normalizedText(questions[index].question) !== normalizedQuestion) {
+          continue;
+        }
+        if (!questions[index].answer || !questions[index].feedback) {
+          return index;
+        }
+      }
+      for (let index = questions.length - 1; index >= 0; index -= 1) {
+        if (normalizedText(questions[index].question) === normalizedQuestion) {
+          return index;
+        }
+      }
+      return questions.length - 1;
+    };
+    persistFeedbackToSession = async ({
+      userId,
+      sessionId,
+      sessionQuestionIndex,
+      question,
+      answer,
+      speechTranscript,
+      answerDurationSec,
+      cameraSnapshot,
+      result
+    }) => {
+      if (!sessionId || !mongoose4.isValidObjectId(sessionId)) {
+        return;
+      }
+      const session = await interviewSession_default.findOne({
+        _id: sessionId,
+        userId
+      });
+      if (!session || session.questions.length === 0) {
+        return;
+      }
+      const targetIndex = resolveTargetQuestionIndex(
+        session.questions,
+        question,
+        sessionQuestionIndex
+      );
+      const targetEntry = session.questions[targetIndex];
+      targetEntry.answer = answer;
+      targetEntry.feedback = result.feedback;
+      if (typeof speechTranscript === "string" && speechTranscript.trim()) {
+        targetEntry.speechTranscript = speechTranscript.trim().slice(0, 5e3);
+      }
+      if (typeof answerDurationSec === "number" && Number.isFinite(answerDurationSec)) {
+        targetEntry.answerDurationSec = Math.max(0, Math.min(7200, Math.round(answerDurationSec)));
+      }
+      if (typeof cameraSnapshot === "string" && cameraSnapshot.startsWith("data:image/")) {
+        targetEntry.cameraSnapshot = cameraSnapshot.slice(0, 45e4);
+      }
+      if (result.followUp?.prompt && targetIndex === session.questions.length - 1) {
+        const nextQuestion = session.questions[targetIndex + 1];
+        const normalizedFollowUp = normalizedText(result.followUp.prompt);
+        const alreadyExists = nextQuestion && normalizedText(nextQuestion.question) === normalizedFollowUp;
+        if (!alreadyExists) {
+          session.questions.push({
+            question: result.followUp.prompt,
+            answer: "",
+            category: targetEntry.category
+          });
+        }
+      }
+      session.lastActivityAt = /* @__PURE__ */ new Date();
+      await session.save();
+    };
+    resolveSessionQuestionIndex = async (params) => {
+      if (!params.sessionId || !mongoose4.isValidObjectId(params.sessionId)) {
+        return void 0;
+      }
+      const session = await interviewSession_default.findOne({
+        _id: params.sessionId,
+        userId: params.userId
+      }).select("questions");
+      if (!session || session.questions.length === 0) {
+        return void 0;
+      }
+      return resolveTargetQuestionIndex(session.questions, params.question);
+    };
+    createFeedbackJob = async (params) => {
+      const provisional = generateHeuristicFeedback(
+        params.role,
+        params.question,
+        params.answer,
+        params.expectedPoints
+      );
+      const sessionQuestionIndex = await resolveSessionQuestionIndex({
+        userId: params.userId,
+        sessionId: params.sessionId,
+        question: params.question
+      });
+      const job = await feedbackJob_default.create({
+        userId: params.userId,
+        sessionId: params.sessionId && mongoose4.isValidObjectId(params.sessionId) ? params.sessionId : void 0,
+        sessionQuestionIndex,
+        role: params.role,
+        question: params.question,
+        answer: params.answer,
+        expectedPoints: params.expectedPoints,
+        speechTranscript: params.speechTranscript,
+        answerDurationSec: params.answerDurationSec,
+        cameraSnapshot: params.cameraSnapshot,
+        status: "pending",
+        provisionalFeedback: provisional.feedback,
+        provisionalFollowUp: provisional.followUp
+      });
+      return {
+        job,
+        provisional
+      };
+    };
+    claimFeedbackJob = async (jobId, userId) => {
+      const staleBefore = new Date(Date.now() - JOB_PROCESS_STALE_MS);
+      return feedbackJob_default.findOneAndUpdate(
+        {
+          _id: jobId,
+          userId,
+          $or: [
+            { status: "pending" },
+            { status: "processing", processingStartedAt: { $lt: staleBefore } }
+          ]
+        },
+        {
+          status: "processing",
+          processingStartedAt: /* @__PURE__ */ new Date(),
+          $inc: { attempts: 1 },
+          $set: { lastError: "" }
+        },
+        { new: true }
+      );
+    };
+    processFeedbackJob = async (jobId, userId) => {
+      if (!mongoose4.isValidObjectId(jobId)) {
+        return null;
+      }
+      const claimedJob = await claimFeedbackJob(jobId, userId);
+      if (!claimedJob) {
+        return feedbackJob_default.findOne({ _id: jobId, userId });
+      }
+      const fallbackResult = {
+        feedback: claimedJob.provisionalFeedback || generateHeuristicFeedback(
+          claimedJob.role,
+          claimedJob.question,
+          claimedJob.answer,
+          claimedJob.expectedPoints
+        ).feedback,
+        followUp: claimedJob.provisionalFollowUp || generateHeuristicFeedback(
+          claimedJob.role,
+          claimedJob.question,
+          claimedJob.answer,
+          claimedJob.expectedPoints
+        ).followUp,
+        source: "heuristic"
+      };
+      try {
+        const result = await generateFeedback(
+          claimedJob.role,
+          claimedJob.question,
+          claimedJob.answer,
+          claimedJob.expectedPoints,
+          { providerTimeoutMs: JOB_PROVIDER_TIMEOUT_MS }
+        );
+        await persistFeedbackToSession({
+          userId,
+          sessionId: claimedJob.sessionId?.toString(),
+          sessionQuestionIndex: claimedJob.sessionQuestionIndex,
+          question: claimedJob.question,
+          answer: claimedJob.answer,
+          speechTranscript: claimedJob.speechTranscript,
+          answerDurationSec: claimedJob.answerDurationSec,
+          cameraSnapshot: claimedJob.cameraSnapshot,
+          result
+        });
+        return feedbackJob_default.findOneAndUpdate(
+          { _id: jobId, userId },
+          {
+            status: "completed",
+            result,
+            lastError: "",
+            $unset: { processingStartedAt: 1 }
+          },
+          { new: true }
+        );
+      } catch (error) {
+        await persistFeedbackToSession({
+          userId,
+          sessionId: claimedJob.sessionId?.toString(),
+          sessionQuestionIndex: claimedJob.sessionQuestionIndex,
+          question: claimedJob.question,
+          answer: claimedJob.answer,
+          speechTranscript: claimedJob.speechTranscript,
+          answerDurationSec: claimedJob.answerDurationSec,
+          cameraSnapshot: claimedJob.cameraSnapshot,
+          result: fallbackResult
+        });
+        const errorMessage = error instanceof Error ? error.message : "Evaluation failed";
+        return feedbackJob_default.findOneAndUpdate(
+          { _id: jobId, userId },
+          {
+            status: "completed",
+            result: fallbackResult,
+            lastError: errorMessage.slice(0, 280),
+            $unset: { processingStartedAt: 1 }
+          },
+          { new: true }
+        );
+      }
+    };
+    getFeedbackJob = async (jobId, userId) => {
+      if (!mongoose4.isValidObjectId(jobId)) {
+        return null;
+      }
+      return feedbackJob_default.findOne({
+        _id: jobId,
+        userId
+      });
+    };
+    getFeedbackJobStatus = async (jobId, userId) => {
+      const job = await getFeedbackJob(jobId, userId);
+      if (!job) {
+        return null;
+      }
+      if (job.status === "pending") {
+        return processFeedbackJob(jobId, userId);
+      }
+      if (job.status === "processing") {
+        const startedAt = job.processingStartedAt?.getTime() ?? 0;
+        if (!startedAt || Date.now() - startedAt > JOB_PROCESS_STALE_MS) {
+          return processFeedbackJob(jobId, userId);
+        }
+      }
+      return job;
+    };
+    startFeedbackJobProcessing = (jobId, userId) => {
+      setTimeout(() => {
+        void processFeedbackJob(jobId, userId);
+      }, 0);
+    };
+    mapJobToApiResponse = (job) => {
+      const base = {
+        success: true,
+        jobId: job.id,
+        status: job.status,
+        attempts: job.attempts
+      };
+      if (job.status === "completed" && job.result) {
+        return {
+          ...base,
+          result: job.result,
+          completedAt: job.updatedAt
+        };
+      }
+      return {
+        ...base,
+        provisionalFeedback: job.provisionalFeedback,
+        provisionalFollowUp: job.provisionalFollowUp,
+        pollAfterMs: job.status === "processing" ? 900 : 1200
+      };
+    };
   }
 });
 
 // backend/src/routes/feedback.routes.ts
 import express from "express";
-var router2, feedback_routes_default;
+import mongoose5 from "mongoose";
+var router2, getUserId, parseExpectedPoints, feedback_routes_default;
 var init_feedback_routes = __esm({
   "backend/src/routes/feedback.routes.ts"() {
     "use strict";
     init_feedback_service();
     init_auth_middleware();
     init_validation_middleware();
-    init_interviewSession();
     init_rateLimit_middleware();
+    init_feedbackJob_service();
     router2 = express.Router();
+    getUserId = (req) => req.user._id;
+    parseExpectedPoints = (value) => Array.isArray(value) ? value.filter((item) => typeof item === "string") : [];
     router2.post(
       "/",
       authMiddleware,
@@ -1237,7 +1706,7 @@ var init_feedback_routes = __esm({
       handleValidationErrors,
       async (req, res) => {
         try {
-          const user = req.user;
+          const userId = getUserId(req);
           const {
             role,
             question,
@@ -1252,38 +1721,19 @@ var init_feedback_routes = __esm({
             role,
             question,
             answer,
-            Array.isArray(expectedPoints) ? expectedPoints : []
+            parseExpectedPoints(expectedPoints),
+            { providerTimeoutMs: 5200 }
           );
-          if (sessionId) {
-            const session = await interviewSession_default.findOne({
-              _id: sessionId,
-              userId: user._id
-            });
-            if (session && session.questions.length > 0) {
-              const lastIdx = session.questions.length - 1;
-              session.questions[lastIdx].answer = answer;
-              session.questions[lastIdx].feedback = result.feedback;
-              if (typeof speechTranscript === "string" && speechTranscript.trim()) {
-                session.questions[lastIdx].speechTranscript = speechTranscript.trim().slice(0, 5e3);
-              }
-              if (typeof answerDurationSec === "number" && Number.isFinite(answerDurationSec)) {
-                session.questions[lastIdx].answerDurationSec = Math.max(0, Math.min(7200, Math.round(answerDurationSec)));
-              }
-              if (typeof cameraSnapshot === "string" && cameraSnapshot.startsWith("data:image/")) {
-                session.questions[lastIdx].cameraSnapshot = cameraSnapshot.slice(0, 45e4);
-              }
-              if (result.followUp?.prompt) {
-                const followUpCategory = session.questions[lastIdx].category;
-                session.questions.push({
-                  question: result.followUp.prompt,
-                  answer: "",
-                  category: followUpCategory
-                });
-              }
-              session.lastActivityAt = /* @__PURE__ */ new Date();
-              await session.save();
-            }
-          }
+          await persistFeedbackToSession({
+            userId,
+            sessionId,
+            question,
+            answer,
+            speechTranscript,
+            answerDurationSec,
+            cameraSnapshot,
+            result
+          });
           return res.json(result);
         } catch {
           return res.status(500).json({
@@ -1293,6 +1743,78 @@ var init_feedback_routes = __esm({
         }
       }
     );
+    router2.post(
+      "/jobs",
+      authMiddleware,
+      feedbackRateLimit,
+      ...feedbackValidation,
+      handleValidationErrors,
+      async (req, res) => {
+        try {
+          const userId = getUserId(req);
+          const {
+            role,
+            question,
+            answer,
+            expectedPoints,
+            speechTranscript,
+            answerDurationSec,
+            cameraSnapshot,
+            sessionId
+          } = req.body;
+          const { job, provisional } = await createFeedbackJob({
+            userId,
+            role,
+            question,
+            answer,
+            expectedPoints: parseExpectedPoints(expectedPoints),
+            speechTranscript,
+            answerDurationSec,
+            cameraSnapshot,
+            sessionId
+          });
+          startFeedbackJobProcessing(job.id, userId);
+          return res.status(202).json({
+            success: true,
+            jobId: job.id,
+            status: job.status,
+            pollAfterMs: 1200,
+            provisionalFeedback: provisional.feedback,
+            provisionalFollowUp: provisional.followUp
+          });
+        } catch {
+          return res.status(500).json({
+            success: false,
+            message: "Failed to start feedback evaluation job"
+          });
+        }
+      }
+    );
+    router2.get("/jobs/:jobId", authMiddleware, feedbackPollRateLimit, async (req, res) => {
+      try {
+        const userId = getUserId(req);
+        const { jobId } = req.params;
+        if (!mongoose5.isValidObjectId(jobId)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid evaluation job id"
+          });
+        }
+        const job = await getFeedbackJobStatus(jobId, userId);
+        if (!job) {
+          return res.status(404).json({
+            success: false,
+            message: "Evaluation job not found"
+          });
+        }
+        return res.json(mapJobToApiResponse(job));
+      } catch {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to fetch evaluation job status"
+        });
+      }
+    });
     feedback_routes_default = router2;
   }
 });
@@ -1628,7 +2150,7 @@ var init_auth_routes = __esm({
 
 // backend/src/routes/history.routes.ts
 import { Router as Router3 } from "express";
-import mongoose3 from "mongoose";
+import mongoose6 from "mongoose";
 var router4, history_routes_default;
 var init_history_routes = __esm({
   "backend/src/routes/history.routes.ts"() {
@@ -1652,7 +2174,7 @@ var init_history_routes = __esm({
       try {
         const user = req.user;
         const { id } = req.params;
-        if (!mongoose3.isValidObjectId(id)) {
+        if (!mongoose6.isValidObjectId(id)) {
           return res.status(400).json({
             success: false,
             message: "Invalid session identifier"
@@ -1793,24 +2315,24 @@ var init_resume_routes = __esm({
 });
 
 // backend/src/lib/recordingStore.ts
-import mongoose4 from "mongoose";
+import mongoose7 from "mongoose";
 var RECORDING_BUCKET, toObjectId, getBucket, saveRecordingFile, getRecordingFileById, deleteRecordingFile, streamRecordingFile;
 var init_recordingStore = __esm({
   "backend/src/lib/recordingStore.ts"() {
     "use strict";
     RECORDING_BUCKET = "interview_recordings";
     toObjectId = (value) => {
-      if (!mongoose4.isValidObjectId(value)) {
+      if (!mongoose7.isValidObjectId(value)) {
         throw new Error("Invalid recording id");
       }
-      return new mongoose4.Types.ObjectId(value);
+      return new mongoose7.Types.ObjectId(value);
     };
     getBucket = () => {
-      const db = mongoose4.connection.db;
+      const db = mongoose7.connection.db;
       if (!db) {
         throw new Error("Database connection is not ready");
       }
-      return new mongoose4.mongo.GridFSBucket(db, {
+      return new mongoose7.mongo.GridFSBucket(db, {
         bucketName: RECORDING_BUCKET
       });
     };
@@ -1901,7 +2423,7 @@ var init_recordingStore = __esm({
 // backend/src/routes/recording.routes.ts
 import { Router as Router5 } from "express";
 import multer2 from "multer";
-import mongoose5 from "mongoose";
+import mongoose8 from "mongoose";
 var MAX_RECORDING_SIZE_BYTES, upload2, router6, recording_routes_default;
 var init_recording_routes = __esm({
   "backend/src/routes/recording.routes.ts"() {
@@ -1935,7 +2457,7 @@ var init_recording_routes = __esm({
       try {
         const user = req.user;
         const { fileId } = req.params;
-        if (!mongoose5.isValidObjectId(fileId)) {
+        if (!mongoose8.isValidObjectId(fileId)) {
           return res.status(400).json({
             success: false,
             message: "Invalid recording identifier"
@@ -2003,7 +2525,7 @@ var init_recording_routes = __esm({
               message: "No recording uploaded"
             });
           }
-          if (!sessionId || !mongoose5.isValidObjectId(sessionId)) {
+          if (!sessionId || !mongoose8.isValidObjectId(sessionId)) {
             return res.status(400).json({
               success: false,
               message: "Valid sessionId is required"
@@ -2061,7 +2583,7 @@ var init_recording_routes = __esm({
 });
 
 // backend/src/lib/db.ts
-import mongoose6 from "mongoose";
+import mongoose9 from "mongoose";
 async function dbConnect() {
   if (cached?.conn) {
     return cached.conn;
@@ -2076,7 +2598,7 @@ async function dbConnect() {
       serverSelectionTimeoutMS: 5e3,
       socketTimeoutMS: 1e4
     };
-    cached.promise = mongoose6.connect(mongoUri, opts).then((mongooseInstance) => {
+    cached.promise = mongoose9.connect(mongoUri, opts).then((mongooseInstance) => {
       return mongooseInstance;
     });
   }
@@ -2114,7 +2636,7 @@ import path from "path";
 import express2 from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import mongoose7 from "mongoose";
+import mongoose10 from "mongoose";
 import { fileURLToPath } from "url";
 var env, app, isProduction3, defaultDevOrigins, allowedOrigins, __filename, __dirname, frontendCandidates, frontendPath, normalizeHost, getOriginHost, isOriginAllowed, baseCorsOptions, corsDelegate, buildHealthPayload, healthHandler, readinessHandler, requireDb, app_default;
 var init_app = __esm({
@@ -2202,7 +2724,7 @@ var init_app = __esm({
     buildHealthPayload = () => ({
       uptime: Math.round(process.uptime()),
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      dbState: mongoose7.connection.readyState
+      dbState: mongoose10.connection.readyState
     });
     healthHandler = (_req, res) => {
       res.status(200).json({

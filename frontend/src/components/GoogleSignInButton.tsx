@@ -4,6 +4,10 @@ interface GoogleSignInButtonProps {
   onSuccess: (credential: string) => void;
   disabled?: boolean;
   text?: "signin_with" | "signup_with" | "continue_with" | "signin";
+  theme?: "outline" | "filled_black" | "filled_blue";
+  size?: "small" | "medium" | "large";
+  shape?: "rectangular" | "pill" | "circle" | "square";
+  className?: string;
 }
 
 const GOOGLE_SCRIPT_ID = "google-identity-services";
@@ -39,6 +43,10 @@ export default function GoogleSignInButton({
   onSuccess,
   disabled = false,
   text = "continue_with",
+  theme = "outline",
+  size = "large",
+  shape = "pill",
+  className = "",
 }: GoogleSignInButtonProps) {
   const buttonContainerRef = useRef<HTMLDivElement | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -66,12 +74,14 @@ export default function GoogleSignInButton({
         });
 
         buttonContainerRef.current.innerHTML = "";
+        const targetWidth = Math.max(220, Math.min(420, Math.floor(buttonContainerRef.current.clientWidth || 320)));
+
         window.google.accounts.id.renderButton(buttonContainerRef.current, {
-          theme: "outline",
-          size: "large",
-          shape: "pill",
+          theme,
+          size,
+          shape,
           text,
-          width: 320,
+          width: targetWidth,
           logo_alignment: "left",
         });
       })
@@ -83,14 +93,14 @@ export default function GoogleSignInButton({
     return () => {
       active = false;
     };
-  }, [onSuccess, text]);
+  }, [onSuccess, shape, size, text, theme]);
 
   if (!GOOGLE_CLIENT_ID) {
     return null;
   }
 
   return (
-    <div className="oauth-block" aria-disabled={disabled}>
+    <div className={`oauth-block ${className}`.trim()} aria-disabled={disabled}>
       <div
         ref={buttonContainerRef}
         className="google-button-container"

@@ -3,7 +3,9 @@ import { signup, googleLogin } from "../api/auth";
 import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
 import GoogleSignInButton from "../components/GoogleSignInButton";
+import { Eye, EyeOff } from "lucide-react";
 import "../App.css";
+import "../styles/auth-modern.css";
 
 export default function Signup() {
   const { setUser } = useAuth();
@@ -16,13 +18,18 @@ export default function Signup() {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
+  const canSubmit =
+    name.trim().length > 1 &&
+    email.trim().length > 0 &&
+    password.trim().length >= 8 &&
+    !loading;
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     setErr("");
 
-    const res = await signup(name, email, password);
+    const res = await signup(name.trim(), email.trim(), password);
     if (res.success === false) {
       setErr(res.message || "Signup failed");
       setLoading(false);
@@ -54,88 +61,107 @@ export default function Signup() {
   );
 
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <div className="auth-title">
+    <div className="auth-modern-page">
+      <div className="auth-modern-card">
+        <div className="auth-modern-title">
           <h1>Create Account</h1>
-          <p className="auth-subtitle">
-            Start practicing interviews with AI
-          </p>
-          <p className="auth-highlights">Modern auth flow with Google sign-in and secure session cookies.</p>
+          <p>Build your InterviewAI profile in seconds</p>
         </div>
 
-        {hasGoogleClientId && (
-          <>
-            <GoogleSignInButton onSuccess={handleGoogleSuccess} disabled={loading} text="signup_with" />
-            <div className="auth-divider">
-              <span>or</span>
-            </div>
-          </>
-        )}
-
-        <form onSubmit={submit} className="auth-form">
-          <div className="form-group">
-            <label className="form-label" htmlFor="name">
-              Full Name
+        <form onSubmit={submit} className="auth-modern-form">
+          <div className="auth-modern-field">
+            <label className="auth-modern-label" htmlFor="name">
+              Full name
             </label>
             <input
+              className="auth-modern-input"
               id="name"
               type="text"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="John Doe"
+              placeholder="Enter your full name"
+              autoComplete="name"
               required
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="email">
-              Email Address
+          <div className="auth-modern-field">
+            <label className="auth-modern-label" htmlFor="email">
+              Email
             </label>
             <input
+              className="auth-modern-input"
               id="email"
               type="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              placeholder="you@example.com"
+              placeholder="Enter your email"
+              autoComplete="email"
               required
             />
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="password">
+          <div className="auth-modern-field">
+            <label className="auth-modern-label" htmlFor="password">
               Password
             </label>
-            <div className="password-field-wrap">
+            <div className="auth-modern-password-wrap">
               <input
+                className="auth-modern-input auth-modern-password-input"
                 id="password"
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="Min 8 chars, 1 letter, 1 number"
+                placeholder="Minimum 8 characters"
                 required
                 minLength={8}
+                autoComplete="new-password"
               />
               <button
                 type="button"
-                className="password-toggle"
+                className="auth-modern-password-toggle"
                 onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
               >
-                {showPassword ? "Hide" : "Show"}
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <span className="form-hint">At least 8 characters, one letter, and one number</span>
+            <span className="auth-modern-hint">Use at least 8 characters with letters and numbers</span>
           </div>
 
-          {err && <div className="error-message">{err}</div>}
+          {err && (
+            <div className="auth-modern-error" role="alert">
+              {err}
+            </div>
+          )}
 
-          <button type="submit" className="btn-primary" disabled={loading}>
+          <button type="submit" className="auth-modern-submit" disabled={!canSubmit}>
             {loading ? "Creating account..." : "Sign Up"}
           </button>
         </form>
 
-        <div className="auth-footer">
-          Already have an account? <Link to="/login">Sign in here</Link>
+        {hasGoogleClientId && (
+          <>
+            <div className="auth-modern-divider">
+              <span>Or</span>
+            </div>
+            <GoogleSignInButton
+              className="auth-modern-google"
+              onSuccess={handleGoogleSuccess}
+              disabled={loading}
+              text="signup_with"
+              theme="filled_black"
+              shape="pill"
+              size="large"
+            />
+          </>
+        )}
+
+        <div className="auth-modern-footer">
+          Already have an account? <Link to="/login">Sign in</Link>
+        </div>
+        <div className="auth-modern-legal">
+          By continuing you agree to InterviewAI Terms of Service and Privacy Policy.
         </div>
       </div>
     </div>

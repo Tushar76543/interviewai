@@ -67,6 +67,33 @@ export default function Signup() {
           <h1>Create Account</h1>
           <p>Build your InterviewAI profile in seconds</p>
         </div>
+        <div className="auth-modern-top-oauth">
+          {hasGoogleClientId ? (
+            <GoogleSignInButton
+              className="auth-modern-google"
+              onSuccess={handleGoogleSuccess}
+              disabled={loading}
+              text="signup_with"
+              theme="filled_black"
+              shape="pill"
+              size="large"
+            />
+          ) : (
+            <button
+              type="button"
+              className="auth-modern-google-fallback"
+              onClick={() =>
+                setErr("Google sign-up is not configured yet. Add VITE_GOOGLE_CLIENT_ID to enable it.")
+              }
+            >
+              Sign up with Google
+            </button>
+          )}
+        </div>
+
+        <div className="auth-modern-divider">
+          <span>Or create account with email</span>
+        </div>
 
         <form onSubmit={submit} className="auth-modern-form">
           <div className="auth-modern-field">
@@ -139,23 +166,6 @@ export default function Signup() {
             {loading ? "Creating account..." : "Sign Up"}
           </button>
         </form>
-
-        {hasGoogleClientId && (
-          <>
-            <div className="auth-modern-divider">
-              <span>Or</span>
-            </div>
-            <GoogleSignInButton
-              className="auth-modern-google"
-              onSuccess={handleGoogleSuccess}
-              disabled={loading}
-              text="signup_with"
-              theme="filled_black"
-              shape="pill"
-              size="large"
-            />
-          </>
-        )}
 
         <div className="auth-modern-footer">
           Already have an account? <Link to="/login">Sign in</Link>

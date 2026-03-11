@@ -69,6 +69,27 @@
   gap: 1rem;
 }
 
+.auth-modern-top-oauth {
+  margin-bottom: 0.95rem;
+}
+
+.auth-modern-google-fallback {
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid rgba(100, 116, 139, 0.52);
+  border-radius: 999px;
+  background: rgba(10, 15, 24, 0.9);
+  color: #cfdcf1;
+  font-size: 1.03rem;
+  font-weight: 700;
+  transition: all 160ms ease;
+}
+
+.auth-modern-google-fallback:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #f8fafc;
+}
+
 .auth-modern-field {
   display: flex;
   flex-direction: column;
@@ -187,11 +208,11 @@
 }
 
 .auth-modern-divider {
-  margin: 1.4rem 0 1rem;
+  margin: 0.75rem 0 1rem;
   display: flex;
   align-items: center;
   color: #96a7c3;
-  font-size: 1.05rem;
+  font-size: 0.95rem;
 }
 
 .auth-modern-divider::before,

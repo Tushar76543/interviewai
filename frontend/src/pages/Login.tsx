@@ -63,6 +63,33 @@ export default function Login() {
           <h1>Welcome Back</h1>
           <p>Sign in to continue to InterviewAI</p>
         </div>
+        <div className="auth-modern-top-oauth">
+          {hasGoogleClientId ? (
+            <GoogleSignInButton
+              className="auth-modern-google"
+              onSuccess={handleGoogleSuccess}
+              disabled={loading}
+              text="signin_with"
+              theme="filled_black"
+              shape="pill"
+              size="large"
+            />
+          ) : (
+            <button
+              type="button"
+              className="auth-modern-google-fallback"
+              onClick={() =>
+                setErr("Google sign-in is not configured yet. Add VITE_GOOGLE_CLIENT_ID to enable it.")
+              }
+            >
+              Continue with Google
+            </button>
+          )}
+        </div>
+
+        <div className="auth-modern-divider">
+          <span>Or continue with email</span>
+        </div>
 
         <form onSubmit={submit} className="auth-modern-form">
           <div className="auth-modern-field">
@@ -125,23 +152,6 @@ export default function Login() {
             {loading ? "Signing in..." : "Sign In"}
           </button>
         </form>
-
-        {hasGoogleClientId && (
-          <>
-            <div className="auth-modern-divider">
-              <span>Or</span>
-            </div>
-            <GoogleSignInButton
-              className="auth-modern-google"
-              onSuccess={handleGoogleSuccess}
-              disabled={loading}
-              text="signin_with"
-              theme="filled_black"
-              shape="pill"
-              size="large"
-            />
-          </>
-        )}
 
         <div className="auth-modern-footer">
           You don't have an account? <Link to="/signup">Sign up</Link>

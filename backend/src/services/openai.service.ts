@@ -333,7 +333,7 @@ Return JSON only in this format:
 
   const referer = process.env.FRONTEND_URL?.startsWith("http")
     ? process.env.FRONTEND_URL
-    : "https://interviewai.app";
+    : "https://interviewpilot.app";
 
   try {
     const response = await axios.post(
@@ -341,7 +341,7 @@ Return JSON only in this format:
       {
         model: process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
         messages: [
-          { role: "system", content: "You are an AI Interview Coach." },
+          { role: "system", content: "You are the InterviewPilot AI Interview Coach." },
           { role: "user", content: prompt },
         ],
         temperature: 0.5,
@@ -352,7 +352,7 @@ Return JSON only in this format:
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "HTTP-Referer": referer,
-          "X-Title": "Interview AI Coach",
+          "X-Title": "InterviewPilot Coach",
           "Content-Type": "application/json",
         },
       }

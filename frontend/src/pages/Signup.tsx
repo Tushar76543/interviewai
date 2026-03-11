@@ -65,7 +65,7 @@ export default function Signup() {
       <div className="auth-modern-card">
         <div className="auth-modern-title">
           <h1>Create Account</h1>
-          <p>Build your InterviewAI profile in seconds</p>
+          <p>Build your InterviewPilot profile in seconds</p>
         </div>
         <div className="auth-modern-top-oauth">
           {hasGoogleClientId ? (
@@ -171,7 +171,7 @@ export default function Signup() {
           Already have an account? <Link to="/login">Sign in</Link>
         </div>
         <div className="auth-modern-legal">
-          By continuing you agree to InterviewAI Terms of Service and Privacy Policy.
+          By continuing you agree to InterviewPilot Terms of Service and Privacy Policy.
         </div>
       </div>
     </div>

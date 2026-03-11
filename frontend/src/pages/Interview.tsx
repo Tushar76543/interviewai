@@ -104,6 +104,16 @@ const formatElapsedTime = (seconds: number) => {
 };
 
 const normalizeMultiline = (value: string) => value.replace(/\r/g, "").trim();
+const DRAFT_STORAGE_PREFIX = "interviewpilot:draft";
+
+const hashText = (value: string) => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+};
 
 const normalizeFeedbackScores = (
   feedback: Feedback,
@@ -244,6 +254,10 @@ function Interview() {
     return fullTranscript || transcript.trim();
   }, [finalTranscript, interimTranscript, transcript]);
   const questionPrompt = question?.prompt ?? "";
+  const draftStorageKey = useMemo(() => {
+    if (!questionPrompt) return "";
+    return `${DRAFT_STORAGE_PREFIX}:${hashText(questionPrompt)}`;
+  }, [questionPrompt]);
 
   const answerChecklist = useMemo(() => {
     const lowerAnswer = answer.toLowerCase();
@@ -269,6 +283,32 @@ function Interview() {
   }, [answer]);
 
   const checklistDoneCount = answerChecklist.filter((item) => item.done).length;
+  const coachSuggestions = useMemo(() => {
+    const pending = answerChecklist.filter((item) => !item.done).map((item) => item.label);
+    const suggestions: string[] = [];
+
+    if (answerWordCount < MIN_RECOMMENDED_WORDS) {
+      suggestions.push(`Increase depth to at least ${MIN_RECOMMENDED_WORDS} words.`);
+    }
+
+    if (pending.includes("Trade-offs or alternatives")) {
+      suggestions.push("Add one trade-off decision and justify your final choice.");
+    }
+
+    if (pending.includes("Validation or testing")) {
+      suggestions.push("Mention how you would test and monitor this in production.");
+    }
+
+    if (pending.includes("Concrete example or metric")) {
+      suggestions.push("Add a real example with a measurable impact or KPI.");
+    }
+
+    if (suggestions.length === 0) {
+      suggestions.push("Solid structure detected. Add one extra edge case to make it interview-ready.");
+    }
+
+    return suggestions.slice(0, 3);
+  }, [answerChecklist, answerWordCount]);
 
   useEffect(() => {
     transcriptRef.current = combinedTranscript;
@@ -338,6 +378,33 @@ function Interview() {
       return "";
     });
   }, [questionPrompt, resetTranscript]);
+
+  useEffect(() => {
+    if (!draftStorageKey || typeof window === "undefined") {
+      return;
+    }
+
+    const savedDraft = window.localStorage.getItem(draftStorageKey);
+    if (!savedDraft || answer.trim()) {
+      return;
+    }
+
+    setAnswer(savedDraft);
+    setTemplateNotice("Recovered your saved draft for this question.");
+  }, [answer, draftStorageKey]);
+
+  useEffect(() => {
+    if (!draftStorageKey || typeof window === "undefined") {
+      return;
+    }
+
+    if (!answer.trim()) {
+      window.localStorage.removeItem(draftStorageKey);
+      return;
+    }
+
+    window.localStorage.setItem(draftStorageKey, answer);
+  }, [answer, draftStorageKey]);
 
   useEffect(() => {
     return () => {
@@ -715,6 +782,9 @@ function Interview() {
       });
 
       setFeedback(nextFeedback);
+      if (draftStorageKey && typeof window !== "undefined") {
+        window.localStorage.removeItem(draftStorageKey);
+      }
 
       if (autoSpeak) {
         speak(
@@ -758,6 +828,7 @@ function Interview() {
     sessionId,
     speak,
     speechTranscriptLog,
+    draftStorageKey,
     pollFeedbackJob,
     uploadRecordingIfNeeded,
   ]);
@@ -1032,6 +1103,7 @@ function Interview() {
                 <span>{answerWordCount} words</span>
                 <span>{answerCharCount} chars</span>
                 <span>Recorded time: {formatElapsedTime(elapsedSeconds)}</span>
+                {draftStorageKey && <span>Draft auto-save enabled</span>}
                 <span className="answer-shortcut">Shortcut: Ctrl/Cmd + Enter to submit</span>
               </div>
             </div>
@@ -1070,6 +1142,19 @@ function Interview() {
                 {answerChecklist.map((item) => (
                   <li key={item.label} className={item.done ? "check-done" : "check-pending"}>
                     {item.done ? "Complete" : "Pending"} - {item.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="answer-checklist" style={{ marginTop: "var(--space-sm)" }}>
+              <div className="answer-checklist-header">
+                <strong>Live Coach Suggestions</strong>
+              </div>
+              <ul>
+                {coachSuggestions.map((item) => (
+                  <li key={item} className="check-pending">
+                    Tip - {item}
                   </li>
                 ))}
               </ul>

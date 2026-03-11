@@ -61,7 +61,7 @@ export default function Login() {
       <div className="auth-modern-card">
         <div className="auth-modern-title">
           <h1>Welcome Back</h1>
-          <p>Sign in to continue to InterviewAI</p>
+          <p>Sign in to continue to InterviewPilot</p>
         </div>
         <div className="auth-modern-top-oauth">
           {hasGoogleClientId ? (
@@ -115,7 +115,7 @@ export default function Login() {
               </label>
               <a
                 className="auth-modern-inline-link"
-                href="mailto:support@interviewai.app?subject=Password%20reset%20request"
+                href="mailto:support@interviewpilot.app?subject=Password%20reset%20request"
               >
                 Forgot your password?
               </a>
@@ -157,7 +157,7 @@ export default function Login() {
           You don't have an account? <Link to="/signup">Sign up</Link>
         </div>
         <div className="auth-modern-legal">
-          By continuing you agree to InterviewAI Terms of Service and Privacy Policy.
+          By continuing you agree to InterviewPilot Terms of Service and Privacy Policy.
         </div>
       </div>
     </div>

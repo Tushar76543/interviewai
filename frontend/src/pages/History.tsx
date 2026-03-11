@@ -84,6 +84,59 @@ export default function History() {
     return total / scored.length;
   };
 
+  const downloadSessionReport = (session: Session) => {
+    const lines: string[] = [];
+    lines.push(`# InterviewPilot Session Report`);
+    lines.push(``);
+    lines.push(`Role: ${session.role}`);
+    lines.push(`Difficulty: ${session.difficulty}`);
+    lines.push(`Last Activity: ${formatDate(session.lastActivityAt)}`);
+    lines.push(`Session ID: ${session._id}`);
+    lines.push(``);
+
+    session.questions.forEach((entry, index) => {
+      lines.push(`## Q${index + 1}`);
+      lines.push(`Question: ${entry.question}`);
+      lines.push(``);
+      lines.push(`Answer:`);
+      lines.push(entry.answer || "No answer recorded.");
+      lines.push(``);
+
+      if (entry.feedback) {
+        const overall =
+          typeof entry.feedback.overall === "number"
+            ? entry.feedback.overall
+            : (
+                (entry.feedback.technical + entry.feedback.clarity + entry.feedback.completeness) /
+                3
+              ).toFixed(1);
+
+        lines.push(`Scores:`);
+        lines.push(`- Technical: ${entry.feedback.technical}/10`);
+        lines.push(`- Clarity: ${entry.feedback.clarity}/10`);
+        lines.push(`- Completeness: ${entry.feedback.completeness}/10`);
+        lines.push(`- Overall: ${overall}/10`);
+        lines.push(``);
+
+        if (entry.feedback.suggestion) {
+          lines.push(`Suggestion: ${entry.feedback.suggestion}`);
+          lines.push(``);
+        }
+      }
+    });
+
+    const report = lines.join("\n");
+    const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `interviewpilot-session-${session._id}.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="dashboard-container">
       <NavHeader />
@@ -130,7 +183,19 @@ export default function History() {
                       <span className="history-date">{formatDate(session.lastActivityAt)}</span>
                       {avgScore !== null && <span className="history-score">Avg: {avgScore.toFixed(1)}/10</span>}
                     </div>
-                    <span className="history-expand">{isExpanded ? "Collapse" : "Expand"}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <button
+                        type="button"
+                        className="btn-glass btn-sm"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          downloadSessionReport(session);
+                        }}
+                      >
+                        Download Report
+                      </button>
+                      <span className="history-expand">{isExpanded ? "Collapse" : "Expand"}</span>
+                    </div>
                   </div>
                   {isExpanded && (
                     <div className="history-card-body">

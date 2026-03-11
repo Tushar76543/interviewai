@@ -443,7 +443,7 @@ Answer: ${safeAnswer}
 `;
     const referer = process.env.FRONTEND_URL?.startsWith("http")
         ? process.env.FRONTEND_URL
-        : "https://interviewai.app";
+        : "https://interviewpilot.app";
     try {
         const response = await axios.post(OPENROUTER_ENDPOINT, {
             model: process.env.OPENROUTER_FEEDBACK_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
@@ -458,7 +458,7 @@ Answer: ${safeAnswer}
             headers: {
                 Authorization: `Bearer ${apiKey}`,
                 "HTTP-Referer": referer,
-                "X-Title": "Interview AI Coach",
+                "X-Title": "InterviewPilot Coach",
                 "Content-Type": "application/json",
             },
         });

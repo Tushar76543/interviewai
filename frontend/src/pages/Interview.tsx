@@ -93,6 +93,22 @@ const SPEECH_LANGUAGE_OPTIONS = [
 const MIN_RECOMMENDED_WORDS = 40;
 const MIN_RECORDING_SIZE_BYTES = 1024;
 
+const getPreferredRecordingMimeType = () => {
+  if (typeof MediaRecorder === "undefined") {
+    return "";
+  }
+
+  const mimeCandidates = [
+    "video/webm;codecs=vp8,opus",
+    "video/webm;codecs=vp8",
+    "video/webm",
+    "video/mp4;codecs=h264,aac",
+    "video/mp4",
+  ];
+
+  return mimeCandidates.find((mime) => MediaRecorder.isTypeSupported(mime)) ?? "";
+};
+
 const getWordCount = (text: string) => {
   const trimmed = text.trim();
   return trimmed ? trimmed.split(/\s+/).length : 0;
@@ -586,6 +602,7 @@ function Interview() {
       return;
     }
 
+    setRecordingStatus("Finalizing recording...");
     try {
       recorder.requestData();
     } catch {
@@ -617,13 +634,7 @@ function Interview() {
     setRecordingStatus("Recording in progress...");
     recordingStartRef.current = Date.now();
 
-    const mimeCandidates = [
-      "video/webm;codecs=vp9,opus",
-      "video/webm;codecs=vp8,opus",
-      "video/webm",
-      "video/mp4",
-    ];
-    const selectedMime = mimeCandidates.find((mime) => MediaRecorder.isTypeSupported(mime));
+    const selectedMime = getPreferredRecordingMimeType();
 
     const recorder = selectedMime
       ? new MediaRecorder(stream, {
@@ -671,7 +682,7 @@ function Interview() {
     };
 
     mediaRecorderRef.current = recorder;
-    recorder.start(1000);
+    recorder.start();
     setIsVideoRecording(true);
   }, [clearRecordingArtifacts, showCamera]);
 

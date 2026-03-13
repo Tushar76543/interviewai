@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import api, { apiBaseUrl } from "../services/api";
+import api, { resolveApiAssetUrl } from "../services/api";
 import NavHeader from "../components/NavHeader";
 import "../App.css";
 import { extractApiErrorMessage } from "../utils/http";
@@ -53,6 +53,9 @@ const questionAverage = (entry: QAEntry) => {
   return (entry.feedback.technical + entry.feedback.clarity + entry.feedback.completeness) / 3;
 };
 
+const buildDirectRecordingUrl = (recordingId: string) =>
+  resolveApiAssetUrl(`/api/interview/recording/${recordingId}`);
+
 export default function History() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +64,8 @@ export default function History() {
   const [recordingUrls, setRecordingUrls] = useState<Record<string, string>>({});
   const [recordingLoading, setRecordingLoading] = useState<Record<string, boolean>>({});
   const [recordingFailed, setRecordingFailed] = useState<Record<string, boolean>>({});
+  const [recordingDirectFallback, setRecordingDirectFallback] = useState<Record<string, boolean>>({});
+  const [recordingPlaybackError, setRecordingPlaybackError] = useState<Record<string, string>>({});
 
   useEffect(() => {
     api
@@ -106,7 +111,7 @@ export default function History() {
         );
         const signedUrl =
           typeof response.data?.signedUrl === "string" && response.data.signedUrl.trim()
-            ? response.data.signedUrl.trim()
+            ? resolveApiAssetUrl(response.data.signedUrl.trim())
             : "";
         if (!signedUrl) {
           throw new Error("Signed URL unavailable");
@@ -153,6 +158,38 @@ export default function History() {
 
     const total = scored.reduce((sum, score) => sum + score, 0);
     return total / scored.length;
+  };
+
+  const getRecordingUrl = (recordingId: string) => {
+    if (!recordingDirectFallback[recordingId] && recordingUrls[recordingId]) {
+      return recordingUrls[recordingId];
+    }
+
+    return buildDirectRecordingUrl(recordingId);
+  };
+
+  const handleRecordingPlaybackError = (recordingId: string) => {
+    if (recordingUrls[recordingId] && !recordingDirectFallback[recordingId]) {
+      setRecordingDirectFallback((prev) => ({ ...prev, [recordingId]: true }));
+      return;
+    }
+
+    setRecordingPlaybackError((prev) => ({
+      ...prev,
+      [recordingId]: "Recorded video could not be loaded.",
+    }));
+  };
+
+  const handleRecordingPlaybackReady = (recordingId: string) => {
+    setRecordingPlaybackError((prev) => {
+      if (!prev[recordingId]) {
+        return prev;
+      }
+
+      const next = { ...prev };
+      delete next[recordingId];
+      return next;
+    });
   };
 
   const downloadSessionReport = (session: Session) => {
@@ -302,15 +339,20 @@ export default function History() {
                                 <div className="history-video-preview">
                                   <strong>Recorded video:</strong>
                                   <video
+                                    key={getRecordingUrl(entry.recordingFileId)}
                                     controls
                                     preload="metadata"
+                                    playsInline
                                     crossOrigin="use-credentials"
-                                    src={
-                                      recordingUrls[entry.recordingFileId] ||
-                                      `${apiBaseUrl}/interview/recording/${entry.recordingFileId}`
-                                    }
+                                    src={getRecordingUrl(entry.recordingFileId)}
+                                    onLoadedMetadata={() => handleRecordingPlaybackReady(entry.recordingFileId!)}
+                                    onCanPlay={() => handleRecordingPlaybackReady(entry.recordingFileId!)}
+                                    onError={() => handleRecordingPlaybackError(entry.recordingFileId!)}
                                   />
                                   {recordingLoading[entry.recordingFileId] && <span>Preparing secure video...</span>}
+                                  {recordingPlaybackError[entry.recordingFileId] && (
+                                    <span>{recordingPlaybackError[entry.recordingFileId]}</span>
+                                  )}
                                   {typeof entry.recordingSizeBytes === "number" && (
                                     <span>
                                       Size: {(entry.recordingSizeBytes / (1024 * 1024)).toFixed(2)} MB

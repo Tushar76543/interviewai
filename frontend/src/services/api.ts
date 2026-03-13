@@ -31,6 +31,27 @@ const resolveApiBaseUrl = () => {
 };
 
 export const apiBaseUrl = resolveApiBaseUrl();
+
+export const resolveApiAssetUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  const base =
+    /^https?:\/\//i.test(apiBaseUrl)
+      ? apiBaseUrl
+      : typeof window !== "undefined"
+        ? window.location.origin
+        : "http://localhost";
+
+  return new URL(trimmed, base).toString();
+};
+
 const CSRF_COOKIE_NAME = "csrf_token";
 
 let csrfBootstrapPromise: Promise<void> | null = null;

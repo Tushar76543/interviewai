@@ -1,6 +1,8 @@
 export {};
 
 declare global {
+  const __GOOGLE_CLIENT_ID__: string;
+
   interface Window {
     google?: {
       accounts: {

@@ -13,7 +13,8 @@
         "build:frontend": "npm --prefix frontend run build",
         "build": "npm run build:backend && npm run build:frontend && npm run bundle:api",
         "bundle:api": "npx esbuild backend/src/serverless.ts --bundle --platform=node --packages=external --outfile=api/index.js --format=esm",
-        "check:prod": "npm run build:backend && npm run lint && npm run build:frontend && npm run bundle:api"
+        "test:integration": "npm --prefix backend run test:integration",
+        "check:prod": "npm run build:backend && npm run lint && npm run build:frontend && npm run bundle:api && npm run test:integration"
     },
     "devDependencies": {
         "concurrently": "^8.2.2",

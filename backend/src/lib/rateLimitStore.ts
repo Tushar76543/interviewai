@@ -52,7 +52,8 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 
   async consume(params: RateLimitConsumeParams): Promise<RateLimitConsumeResult> {
     const now = Date.now();
-    const namespacedKey = `${params.bucket}:${params.key}`;
+    const { redisKeyPrefix } = getEnvConfig();
+    const namespacedKey = `${redisKeyPrefix}:${params.bucket}:${params.key}`;
 
     const existing = this.buckets.get(namespacedKey);
     if (!existing || existing.resetAt <= now) {
@@ -91,7 +92,8 @@ export class UpstashRedisRateLimitStore implements RateLimitStore {
 
   async consume(params: RateLimitConsumeParams): Promise<RateLimitConsumeResult> {
     const now = Date.now();
-    const key = `${params.bucket}:${params.key}`;
+    const { redisKeyPrefix } = getEnvConfig();
+    const key = `${redisKeyPrefix}:${params.bucket}:${params.key}`;
 
     const response = await fetch(`${this.endpoint}/pipeline`, {
       method: "POST",

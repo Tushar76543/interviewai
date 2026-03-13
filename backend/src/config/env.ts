@@ -13,6 +13,10 @@ export type EnvConfig = {
   redisRestUrl: string;
   redisRestToken: string;
   redisConfigured: boolean;
+  redisKeyPrefix: string;
+  redisMemoryPolicy: string;
+  redisPersistenceMode: string;
+  metricsApiKey: string;
 };
 
 const MIN_JWT_SECRET_LENGTH = 32;
@@ -115,6 +119,8 @@ export const getEnvConfig = (): EnvConfig => {
 
   const redisRestUrl = redisPairAllowed ? redisRestUrlCandidate : "";
   const redisRestToken = redisPairAllowed ? redisRestTokenCandidate : "";
+  const redisKeyPrefixCandidate = readEnv("REDIS_KEY_PREFIX").replace(/[:\s]+$/g, "");
+  const redisKeyPrefix = redisKeyPrefixCandidate || "ip";
 
   cachedConfig = {
     nodeEnv,
@@ -127,6 +133,10 @@ export const getEnvConfig = (): EnvConfig => {
     redisRestUrl,
     redisRestToken,
     redisConfigured: Boolean(redisRestUrl && redisRestToken),
+    redisKeyPrefix,
+    redisMemoryPolicy: readEnv("REDIS_MEMORY_POLICY") || "allkeys-lfu",
+    redisPersistenceMode: readEnv("REDIS_PERSISTENCE_MODE") || "cache-only",
+    metricsApiKey: readEnv("METRICS_API_KEY"),
   };
 
   return cachedConfig;

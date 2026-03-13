@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { GOOGLE_OAUTH_CLIENT_ID } from "../utils/googleAuth";
 
 interface GoogleSignInButtonProps {
   onSuccess: (credential: string) => void;
@@ -12,7 +13,6 @@ interface GoogleSignInButtonProps {
 
 const GOOGLE_SCRIPT_ID = "google-identity-services";
 const GOOGLE_SCRIPT_SRC = "https://accounts.google.com/gsi/client";
-const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
 
 const loadGoogleScript = () =>
   new Promise<void>((resolve, reject) => {
@@ -52,7 +52,7 @@ export default function GoogleSignInButton({
   const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) return;
+    if (!GOOGLE_OAUTH_CLIENT_ID) return;
 
     let active = true;
 
@@ -63,7 +63,7 @@ export default function GoogleSignInButton({
         }
 
         window.google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
+          client_id: GOOGLE_OAUTH_CLIENT_ID,
           callback: (response) => {
             if (!response.credential) {
               return;
@@ -95,7 +95,7 @@ export default function GoogleSignInButton({
     };
   }, [onSuccess, shape, size, text, theme]);
 
-  if (!GOOGLE_CLIENT_ID) {
+  if (!GOOGLE_OAUTH_CLIENT_ID) {
     return null;
   }
 

@@ -1,10 +1,172 @@
 import mongoose from "mongoose";
 import FeedbackJob from "../models/feedbackJob.js";
 import InterviewSession from "../models/interviewSession.js";
+import { getRuntimeStore } from "../lib/runtimeStore.js";
+import { getEnvConfig } from "../config/env.js";
 import { generateFeedback, generateHeuristicFeedback, } from "./feedback.service.js";
 const JOB_PROCESS_STALE_MS = 30000;
 const JOB_PROVIDER_TIMEOUT_MS = 5200;
+const { redisKeyPrefix } = getEnvConfig();
+const JOB_QUEUE_NAMESPACE = `${redisKeyPrefix}:queue:feedback`;
+const JOB_QUEUE_READY_KEY = `${JOB_QUEUE_NAMESPACE}:ready`;
+const JOB_QUEUE_RETRY_KEY = `${JOB_QUEUE_NAMESPACE}:retry`;
+const JOB_QUEUE_DLQ_KEY = `${JOB_QUEUE_NAMESPACE}:dead`;
+const JOB_QUEUE_MARKER_PREFIX = `${JOB_QUEUE_NAMESPACE}:marker`;
+const JOB_QUEUE_POLL_MS = 750;
+const JOB_QUEUE_MAX_RETRIES = 3;
+const JOB_QUEUE_RETRY_BASE_MS = 2000;
+const JOB_QUEUE_KEY_TTL_SEC = 60 * 60 * 24;
+const JOB_QUEUE_MARKER_TTL_SEC = 60 * 30;
 const normalizedText = (value) => value.replace(/\s+/g, " ").trim().toLowerCase();
+const runtimeStore = getRuntimeStore();
+let queueWorkerTimer = null;
+let queueWorkerActive = false;
+const parseQueuePayload = (value) => {
+    try {
+        const parsed = JSON.parse(value);
+        if (typeof parsed.jobId !== "string" ||
+            typeof parsed.userId !== "string" ||
+            typeof parsed.attempt !== "number") {
+            return null;
+        }
+        return {
+            jobId: parsed.jobId,
+            userId: parsed.userId,
+            attempt: Math.max(0, Math.trunc(parsed.attempt)),
+            queuedAt: typeof parsed.queuedAt === "number" && Number.isFinite(parsed.queuedAt)
+                ? Math.trunc(parsed.queuedAt)
+                : Date.now(),
+        };
+    }
+    catch {
+        return null;
+    }
+};
+const getQueueMarkerKey = (jobId) => `${JOB_QUEUE_MARKER_PREFIX}:${jobId}`;
+const enqueueQueuePayload = async (payload) => {
+    await runtimeStore.rpush(JOB_QUEUE_READY_KEY, JSON.stringify(payload));
+    await runtimeStore.expire(JOB_QUEUE_READY_KEY, JOB_QUEUE_KEY_TTL_SEC);
+};
+const moveDueRetryJobsToReady = async () => {
+    const now = Date.now();
+    const due = await runtimeStore.zrangeByScore(JOB_QUEUE_RETRY_KEY, now, 20);
+    if (due.length === 0) {
+        return;
+    }
+    for (const raw of due) {
+        await runtimeStore.zrem(JOB_QUEUE_RETRY_KEY, raw);
+        await runtimeStore.rpush(JOB_QUEUE_READY_KEY, raw);
+    }
+    await runtimeStore.expire(JOB_QUEUE_READY_KEY, JOB_QUEUE_KEY_TTL_SEC);
+};
+const queueRetry = async (payload) => {
+    const nextAttempt = payload.attempt + 1;
+    const backoffMs = JOB_QUEUE_RETRY_BASE_MS * Math.max(1, 2 ** payload.attempt);
+    const jitterMs = Math.floor(Math.random() * 300);
+    const nextRunAt = Date.now() + backoffMs + jitterMs;
+    await runtimeStore.zadd(JOB_QUEUE_RETRY_KEY, nextRunAt, JSON.stringify({
+        ...payload,
+        attempt: nextAttempt,
+        queuedAt: Date.now(),
+    }));
+    await runtimeStore.expire(JOB_QUEUE_RETRY_KEY, JOB_QUEUE_KEY_TTL_SEC);
+    await runtimeStore.expire(getQueueMarkerKey(payload.jobId), JOB_QUEUE_MARKER_TTL_SEC);
+};
+const queueDeadLetter = async (payload, reason) => {
+    const deadPayload = {
+        ...payload,
+        reason,
+        failedAt: Date.now(),
+    };
+    await runtimeStore.rpush(JOB_QUEUE_DLQ_KEY, JSON.stringify(deadPayload));
+    await runtimeStore.expire(JOB_QUEUE_DLQ_KEY, JOB_QUEUE_KEY_TTL_SEC);
+};
+const markJobFailed = async (jobId, userId, reason) => {
+    await FeedbackJob.findOneAndUpdate({ _id: jobId, userId }, {
+        status: "failed",
+        lastError: reason.slice(0, 280),
+        $unset: { processingStartedAt: 1 },
+    });
+};
+const enqueueFeedbackJob = async (params) => {
+    const { jobId, userId, force = false } = params;
+    const attempt = Math.max(0, Math.trunc(params.attempt ?? 0));
+    if (!mongoose.isValidObjectId(jobId)) {
+        return false;
+    }
+    ensureQueueWorkerRunning();
+    const markerKey = getQueueMarkerKey(jobId);
+    const acquired = await runtimeStore.setNxEx(markerKey, "1", JOB_QUEUE_MARKER_TTL_SEC);
+    if (!acquired && !force) {
+        return false;
+    }
+    if (!acquired && force) {
+        await runtimeStore.expire(markerKey, JOB_QUEUE_MARKER_TTL_SEC);
+    }
+    await enqueueQueuePayload({
+        jobId,
+        userId,
+        attempt,
+        queuedAt: Date.now(),
+    });
+    return true;
+};
+const processQueuePayload = async (payload) => {
+    try {
+        const result = await processFeedbackJob(payload.jobId, payload.userId);
+        if (result?.status === "completed" || result?.status === "failed") {
+            await runtimeStore.del(getQueueMarkerKey(payload.jobId));
+            return;
+        }
+        if (payload.attempt >= JOB_QUEUE_MAX_RETRIES) {
+            await queueDeadLetter(payload, "max_retries_exceeded");
+            await markJobFailed(payload.jobId, payload.userId, "max_retries_exceeded");
+            await runtimeStore.del(getQueueMarkerKey(payload.jobId));
+            return;
+        }
+        await queueRetry(payload);
+    }
+    catch (error) {
+        if (payload.attempt >= JOB_QUEUE_MAX_RETRIES) {
+            const reason = error instanceof Error ? error.message : "processing_failed";
+            await queueDeadLetter(payload, reason.slice(0, 280));
+            await markJobFailed(payload.jobId, payload.userId, reason);
+            await runtimeStore.del(getQueueMarkerKey(payload.jobId));
+            return;
+        }
+        await queueRetry(payload);
+    }
+};
+const runQueueWorkerTick = async () => {
+    if (queueWorkerActive) {
+        return;
+    }
+    queueWorkerActive = true;
+    try {
+        await moveDueRetryJobsToReady();
+        const rawPayload = await runtimeStore.lpop(JOB_QUEUE_READY_KEY);
+        if (!rawPayload) {
+            return;
+        }
+        const payload = parseQueuePayload(rawPayload);
+        if (!payload) {
+            return;
+        }
+        await processQueuePayload(payload);
+    }
+    finally {
+        queueWorkerActive = false;
+    }
+};
+const ensureQueueWorkerRunning = () => {
+    if (queueWorkerTimer) {
+        return;
+    }
+    queueWorkerTimer = setInterval(() => {
+        void runQueueWorkerTick();
+    }, JOB_QUEUE_POLL_MS);
+    queueWorkerTimer.unref();
+};
 const resolveTargetQuestionIndex = (questions, question, preferredIndex) => {
     const normalizedQuestion = normalizedText(question);
     if (typeof preferredIndex === "number" &&
@@ -40,9 +202,13 @@ export const persistFeedbackToSession = async ({ userId, sessionId, sessionQuest
     if (!session || session.questions.length === 0) {
         return;
     }
+    const sanitizedAnswer = typeof answer === "string" ? answer.trim() : "";
+    if (!sanitizedAnswer) {
+        return;
+    }
     const targetIndex = resolveTargetQuestionIndex(session.questions, question, sessionQuestionIndex);
     const targetEntry = session.questions[targetIndex];
-    targetEntry.answer = answer;
+    targetEntry.answer = sanitizedAnswer;
     targetEntry.feedback = result.feedback;
     if (typeof speechTranscript === "string" && speechTranscript.trim()) {
         targetEntry.speechTranscript = speechTranscript.trim().slice(0, 5000);
@@ -79,6 +245,15 @@ const resolveSessionQuestionIndex = async (params) => {
     if (!session || session.questions.length === 0) {
         return undefined;
     }
+    if (Number.isInteger(params.sessionQuestionIndex) &&
+        typeof params.sessionQuestionIndex === "number" &&
+        params.sessionQuestionIndex >= 0 &&
+        params.sessionQuestionIndex < session.questions.length) {
+        const preferredEntry = session.questions[params.sessionQuestionIndex];
+        if (normalizedText(preferredEntry.question) === normalizedText(params.question)) {
+            return params.sessionQuestionIndex;
+        }
+    }
     return resolveTargetQuestionIndex(session.questions, params.question);
 };
 export const createFeedbackJob = async (params) => {
@@ -87,6 +262,7 @@ export const createFeedbackJob = async (params) => {
         userId: params.userId,
         sessionId: params.sessionId,
         question: params.question,
+        sessionQuestionIndex: params.sessionQuestionIndex,
     });
     const job = await FeedbackJob.create({
         userId: params.userId,
@@ -190,25 +366,38 @@ export const getFeedbackJob = async (jobId, userId) => {
     });
 };
 export const getFeedbackJobStatus = async (jobId, userId) => {
+    ensureQueueWorkerRunning();
     const job = await getFeedbackJob(jobId, userId);
     if (!job) {
         return null;
     }
     if (job.status === "pending") {
-        return processFeedbackJob(jobId, userId);
+        await enqueueFeedbackJob({
+            jobId,
+            userId,
+            attempt: job.attempts,
+            force: true,
+        });
+        return job;
     }
     if (job.status === "processing") {
         const startedAt = job.processingStartedAt?.getTime() ?? 0;
         if (!startedAt || Date.now() - startedAt > JOB_PROCESS_STALE_MS) {
-            return processFeedbackJob(jobId, userId);
+            await enqueueFeedbackJob({
+                jobId,
+                userId,
+                attempt: job.attempts,
+                force: true,
+            });
         }
     }
     return job;
 };
 export const startFeedbackJobProcessing = (jobId, userId) => {
-    setTimeout(() => {
-        void processFeedbackJob(jobId, userId);
-    }, 0);
+    void enqueueFeedbackJob({ jobId, userId });
+};
+export const startFeedbackQueueWorker = () => {
+    ensureQueueWorkerRunning();
 };
 export const mapJobToApiResponse = (job) => {
     const base = {
@@ -221,6 +410,13 @@ export const mapJobToApiResponse = (job) => {
         return {
             ...base,
             result: job.result,
+            completedAt: job.updatedAt,
+        };
+    }
+    if (job.status === "failed") {
+        return {
+            ...base,
+            lastError: job.lastError || "Evaluation failed",
             completedAt: job.updatedAt,
         };
     }

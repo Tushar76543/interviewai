@@ -10,6 +10,9 @@ const UserSchema = new Schema({
         index: true,
     },
     passwordHash: { type: String },
+    passwordHistory: { type: [String], default: [] },
+    passwordResetTokenHash: { type: String, index: true },
+    passwordResetExpiresAt: { type: Date },
     authProvider: {
         type: String,
         enum: ["local", "google"],
@@ -24,6 +27,8 @@ const UserSchema = new Schema({
         index: true,
     },
     avatarUrl: { type: String, trim: true },
+    lastLoginAt: { type: Date },
+    lastLoginFingerprint: { type: String },
     rolePreferences: { type: [String], default: [] },
     interviewHistory: { type: [String], default: [] },
 }, { timestamps: true });
@@ -36,4 +41,5 @@ UserSchema.pre("save", function normalizeUser(next) {
     }
     next();
 });
+UserSchema.index({ lastLoginAt: -1 });
 export default mongoose.models.User || mongoose.model("User", UserSchema);

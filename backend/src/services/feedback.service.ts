@@ -1,4 +1,6 @@
 import axios from "axios";
+import { executeWithAiResilience } from "../lib/aiResilience.js";
+import { logger } from "../lib/observability.js";
 
 export type FeedbackBreakdown = {
   technical: number;
@@ -45,6 +47,14 @@ const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "meta-llama/llama-3.1-8b-instruct:free";
 const DEFAULT_REQUEST_TIMEOUT_MS = Number.parseInt(process.env.FEEDBACK_PROVIDER_TIMEOUT_MS ?? "5200", 10);
 const RESPONSE_MAX_TOKENS = 450;
+const FEEDBACK_PRIMARY_MODEL =
+  process.env.OPENROUTER_FEEDBACK_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
+const FEEDBACK_FALLBACK_MODELS = (
+  process.env.OPENROUTER_FEEDBACK_FALLBACK_MODELS || process.env.OPENROUTER_MODEL_FALLBACKS || ""
+)
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
 
 const STOP_WORDS = new Set([
   "the",
@@ -486,6 +496,19 @@ const parseFeedback = (raw: string): Omit<FeedbackPayload, "source"> | null => {
   }
 };
 
+const isRetriableProviderError = (error: unknown) => {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+
+  const status = error.response?.status;
+  if (!status) {
+    return true;
+  }
+
+  return status === 429 || status >= 500 || error.code === "ECONNABORTED";
+};
+
 export const generateHeuristicFeedback = (
   role: string,
   question: string,
@@ -601,27 +624,40 @@ Answer: ${safeAnswer}
     : "https://interviewpilot.app";
 
   try {
-    const response = await axios.post(
-      OPENROUTER_ENDPOINT,
-      {
-        model: process.env.OPENROUTER_FEEDBACK_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
-        messages: [
-          { role: "system", content: "You are a strict and accurate interview evaluator." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.1,
-        max_tokens: RESPONSE_MAX_TOKENS,
-      },
-      {
-        timeout: requestTimeoutMs,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": referer,
-          "X-Title": "InterviewPilot Coach",
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const { result: response, model: selectedModel } = await executeWithAiResilience({
+      operation: "feedback_evaluation",
+      primaryModel: FEEDBACK_PRIMARY_MODEL,
+      fallbackModels: FEEDBACK_FALLBACK_MODELS,
+      maxRetries: 2,
+      execute: async (model) =>
+        axios.post(
+          OPENROUTER_ENDPOINT,
+          {
+            model,
+            messages: [
+              { role: "system", content: "You are a strict and accurate interview evaluator." },
+              { role: "user", content: prompt },
+            ],
+            temperature: 0.1,
+            max_tokens: RESPONSE_MAX_TOKENS,
+          },
+          {
+            timeout: requestTimeoutMs,
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "HTTP-Referer": referer,
+              "X-Title": "InterviewPilot Coach",
+              "Content-Type": "application/json",
+            },
+          }
+        ),
+      isRetriableError: isRetriableProviderError,
+    });
+
+    logger.info("ai.feedback_model_selected", {
+      model: selectedModel,
+      role: safeRole,
+    });
 
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
@@ -640,9 +676,13 @@ Answer: ${safeAnswer}
     };
   } catch (error) {
     if (axios.isAxiosError(error)) {
-      console.warn("Feedback provider fallback used", {
+      logger.warn("ai.feedback_provider_fallback_used", {
         status: error.response?.status,
         code: error.code,
+      });
+    } else if (error instanceof Error) {
+      logger.warn("ai.feedback_provider_fallback_used", {
+        message: error.message,
       });
     }
 

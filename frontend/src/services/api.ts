@@ -102,4 +102,61 @@ api.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
   return config;
 });
 
+let refreshPromise: Promise<boolean> | null = null;
+
+const shouldSkipRefreshForUrl = (url: string | undefined) => {
+  if (!url) return false;
+  return /\/auth\/(login|signup|google|refresh|forgot-password|reset-password)/i.test(url);
+};
+
+const attemptSessionRefresh = async () => {
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      try {
+        if (!getCsrfToken()) {
+          await ensureCsrfToken();
+        }
+
+        const res = await fetch(`${apiBaseUrl}/auth/refresh`, {
+          method: "POST",
+          credentials: "include",
+          headers: getCsrfToken() ? { "X-CSRF-Token": getCsrfToken() } : {},
+        });
+
+        return res.ok;
+      } catch {
+        return false;
+      } finally {
+        refreshPromise = null;
+      }
+    })();
+  }
+
+  return refreshPromise;
+};
+
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const status = error?.response?.status;
+    const originalRequest = error?.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+
+    if (!originalRequest || status !== 401 || originalRequest._retry) {
+      throw error;
+    }
+
+    if (shouldSkipRefreshForUrl(originalRequest.url)) {
+      throw error;
+    }
+
+    const refreshed = await attemptSessionRefresh();
+    if (!refreshed) {
+      throw error;
+    }
+
+    originalRequest._retry = true;
+    return api(originalRequest);
+  }
+);
+
 export default api;

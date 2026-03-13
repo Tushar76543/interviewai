@@ -67,6 +67,8 @@ const InterviewSessionSchema = new Schema<IInterviewSession>(
 );
 
 InterviewSessionSchema.index({ userId: 1, lastActivityAt: -1 });
+InterviewSessionSchema.index({ userId: 1, role: 1, lastActivityAt: -1 });
+InterviewSessionSchema.index({ userId: 1, _id: -1 });
 
 export default mongoose.models.InterviewSession || mongoose.model<IInterviewSession>(
   "InterviewSession",

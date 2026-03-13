@@ -8,6 +8,345 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// backend/src/lib/observability.ts
+import crypto from "crypto";
+import { AsyncLocalStorage } from "async_hooks";
+var SERVICE_NAME, TRACEPARENT_VERSION, TRACEPARENT_SAMPLED, MAX_LATENCY_SAMPLES_PER_ROUTE, requestContextStore, routeMetrics, TRACKED_ROUTE_PATTERNS, toIso, safeString, randomHex, normalizeRequestId, TRACEPARENT_REGEX, parseTraceparent, asTraceparent, serializeError, writeStructuredLog, percentile, normalizeRoutePattern, shouldTrackRouteLatency, recordRouteLatency, getRouteLatencySnapshot, buildPrometheusMetrics, createRequestContext, getRequestTraceparent, withRequestContext, logger;
+var init_observability = __esm({
+  "backend/src/lib/observability.ts"() {
+    "use strict";
+    SERVICE_NAME = "interviewai-api";
+    TRACEPARENT_VERSION = "00";
+    TRACEPARENT_SAMPLED = "01";
+    MAX_LATENCY_SAMPLES_PER_ROUTE = 3e3;
+    requestContextStore = new AsyncLocalStorage();
+    routeMetrics = /* @__PURE__ */ new Map();
+    TRACKED_ROUTE_PATTERNS = /* @__PURE__ */ new Set([
+      "POST /api/interview/start",
+      "POST /api/interview/feedback/jobs",
+      "GET /api/interview/feedback/jobs/:jobId",
+      "POST /api/interview/recording",
+      "GET /api/interview/recording/:fileId"
+    ]);
+    toIso = () => (/* @__PURE__ */ new Date()).toISOString();
+    safeString = (value, fallback = "") => {
+      if (typeof value !== "string") {
+        return fallback;
+      }
+      return value.trim() || fallback;
+    };
+    randomHex = (bytes) => crypto.randomBytes(bytes).toString("hex");
+    normalizeRequestId = (value) => {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return crypto.randomUUID();
+      }
+      return trimmed.slice(0, 96);
+    };
+    TRACEPARENT_REGEX = /^00-([a-f0-9]{32})-([a-f0-9]{16})-([a-f0-9]{2})$/i;
+    parseTraceparent = (value) => {
+      const match = value.match(TRACEPARENT_REGEX);
+      if (!match) {
+        return null;
+      }
+      return {
+        traceId: match[1].toLowerCase(),
+        parentSpanId: match[2].toLowerCase(),
+        traceFlags: match[3].toLowerCase()
+      };
+    };
+    asTraceparent = (traceId, spanId) => `${TRACEPARENT_VERSION}-${traceId}-${spanId}-${TRACEPARENT_SAMPLED}`;
+    serializeError = (value) => {
+      if (value instanceof Error) {
+        return {
+          name: value.name,
+          message: value.message,
+          stack: value.stack
+        };
+      }
+      if (typeof value === "object" && value !== null) {
+        return value;
+      }
+      return { message: String(value) };
+    };
+    writeStructuredLog = (level, message, fields = {}) => {
+      const context = requestContextStore.getStore();
+      const payload = {
+        timestamp: toIso(),
+        level,
+        message,
+        service: SERVICE_NAME,
+        requestId: context?.requestId,
+        traceId: context?.traceId,
+        spanId: context?.spanId,
+        ...fields
+      };
+      const line = JSON.stringify(payload);
+      if (level === "error") {
+        console.error(line);
+        return;
+      }
+      if (level === "warn") {
+        console.warn(line);
+        return;
+      }
+      console.log(line);
+    };
+    percentile = (values, percentileRank) => {
+      if (values.length === 0) {
+        return 0;
+      }
+      const sorted = [...values].sort((a, b) => a - b);
+      const index = Math.min(
+        sorted.length - 1,
+        Math.max(0, Math.ceil(percentileRank / 100 * sorted.length) - 1)
+      );
+      return Math.round(sorted[index] * 100) / 100;
+    };
+    normalizeRoutePattern = (method, rawPath) => {
+      const cleanMethod = safeString(method, "GET").toUpperCase();
+      const onlyPath = rawPath.split("?")[0]?.replace(/\/+$/, "") || "/";
+      if (/^\/api\/interview\/feedback\/jobs\/[^/]+$/i.test(onlyPath)) {
+        return `${cleanMethod} /api/interview/feedback/jobs/:jobId`;
+      }
+      if (/^\/api\/interview\/recording\/[^/]+$/i.test(onlyPath)) {
+        return `${cleanMethod} /api/interview/recording/:fileId`;
+      }
+      return `${cleanMethod} ${onlyPath}`;
+    };
+    shouldTrackRouteLatency = (routePattern) => TRACKED_ROUTE_PATTERNS.has(routePattern);
+    recordRouteLatency = (params) => {
+      const routePattern = normalizeRoutePattern(params.method, params.path);
+      if (!shouldTrackRouteLatency(routePattern)) {
+        return;
+      }
+      const latencyMs = Math.max(0, Number(params.latencyMs) || 0);
+      const existing = routeMetrics.get(routePattern) ?? {
+        count: 0,
+        errorCount: 0,
+        latenciesMs: [],
+        lastUpdatedAt: toIso()
+      };
+      existing.count += 1;
+      if (params.statusCode >= 400) {
+        existing.errorCount += 1;
+      }
+      existing.latenciesMs.push(latencyMs);
+      if (existing.latenciesMs.length > MAX_LATENCY_SAMPLES_PER_ROUTE) {
+        existing.latenciesMs.splice(
+          0,
+          existing.latenciesMs.length - MAX_LATENCY_SAMPLES_PER_ROUTE
+        );
+      }
+      existing.lastUpdatedAt = toIso();
+      routeMetrics.set(routePattern, existing);
+    };
+    getRouteLatencySnapshot = () => {
+      return [...routeMetrics.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([route, bucket]) => {
+        const p50 = percentile(bucket.latenciesMs, 50);
+        const p95 = percentile(bucket.latenciesMs, 95);
+        const p99 = percentile(bucket.latenciesMs, 99);
+        const avg = bucket.latenciesMs.length === 0 ? 0 : Math.round(
+          bucket.latenciesMs.reduce((sum, value) => sum + value, 0) / bucket.latenciesMs.length * 100
+        ) / 100;
+        return {
+          route,
+          requests: bucket.count,
+          errors: bucket.errorCount,
+          errorRate: bucket.count === 0 ? 0 : Number((bucket.errorCount / bucket.count).toFixed(4)),
+          p50Ms: p50,
+          p95Ms: p95,
+          p99Ms: p99,
+          avgMs: avg,
+          samples: bucket.latenciesMs.length,
+          lastUpdatedAt: bucket.lastUpdatedAt
+        };
+      });
+    };
+    buildPrometheusMetrics = () => {
+      const lines = [];
+      lines.push("# HELP interview_route_latency_ms_p95 p95 latency in milliseconds.");
+      lines.push("# TYPE interview_route_latency_ms_p95 gauge");
+      lines.push("# HELP interview_route_latency_ms_p99 p99 latency in milliseconds.");
+      lines.push("# TYPE interview_route_latency_ms_p99 gauge");
+      lines.push("# HELP interview_route_requests_total Total requests observed per route.");
+      lines.push("# TYPE interview_route_requests_total counter");
+      lines.push("# HELP interview_route_errors_total Total error responses observed per route.");
+      lines.push("# TYPE interview_route_errors_total counter");
+      for (const item of getRouteLatencySnapshot()) {
+        const labelRoute = item.route.replace(/"/g, '\\"');
+        lines.push(`interview_route_latency_ms_p95{route="${labelRoute}"} ${item.p95Ms}`);
+        lines.push(`interview_route_latency_ms_p99{route="${labelRoute}"} ${item.p99Ms}`);
+        lines.push(`interview_route_requests_total{route="${labelRoute}"} ${item.requests}`);
+        lines.push(`interview_route_errors_total{route="${labelRoute}"} ${item.errors}`);
+      }
+      return `${lines.join("\n")}
+`;
+    };
+    createRequestContext = (params) => {
+      const parsedTraceparent = parseTraceparent(params.traceparentHeader);
+      return {
+        requestId: normalizeRequestId(params.requestIdHeader),
+        traceId: parsedTraceparent?.traceId ?? randomHex(16),
+        spanId: randomHex(8),
+        method: safeString(params.method, "GET").toUpperCase(),
+        path: safeString(params.path, "/"),
+        startedAtMs: Date.now()
+      };
+    };
+    getRequestTraceparent = (context) => asTraceparent(context.traceId, context.spanId);
+    withRequestContext = (context, callback) => requestContextStore.run(context, callback);
+    logger = {
+      debug(message, fields) {
+        writeStructuredLog("debug", message, fields);
+      },
+      info(message, fields) {
+        writeStructuredLog("info", message, fields);
+      },
+      warn(message, fields) {
+        writeStructuredLog("warn", message, fields);
+      },
+      error(message, fields) {
+        writeStructuredLog("error", message, fields);
+      },
+      errorWithException(message, error, fields) {
+        writeStructuredLog("error", message, {
+          ...fields,
+          error: serializeError(error)
+        });
+      }
+    };
+  }
+});
+
+// backend/src/lib/aiResilience.ts
+var FAILURE_WINDOW_MS, ERROR_BUDGET_MAX_FAILURE_RATE, BREAKER_CONSECUTIVE_FAILURES, BREAKER_COOLDOWN_MS, MAX_BACKOFF_MS, operationState, getState, sleep, markSuccess, markFailure, isCircuitOpen, listModels, getAiResilienceSnapshot, executeWithAiResilience;
+var init_aiResilience = __esm({
+  "backend/src/lib/aiResilience.ts"() {
+    "use strict";
+    init_observability();
+    FAILURE_WINDOW_MS = Number.parseInt(process.env.AI_ERROR_BUDGET_WINDOW_MS ?? "60000", 10);
+    ERROR_BUDGET_MAX_FAILURE_RATE = Number.parseFloat(
+      process.env.AI_ERROR_BUDGET_MAX_FAILURE_RATE ?? "0.35"
+    );
+    BREAKER_CONSECUTIVE_FAILURES = Number.parseInt(
+      process.env.AI_CIRCUIT_BREAKER_FAILURE_THRESHOLD ?? "5",
+      10
+    );
+    BREAKER_COOLDOWN_MS = Number.parseInt(process.env.AI_CIRCUIT_BREAKER_COOLDOWN_MS ?? "20000", 10);
+    MAX_BACKOFF_MS = 2e3;
+    operationState = /* @__PURE__ */ new Map();
+    getState = (operation) => {
+      const now = Date.now();
+      const existing = operationState.get(operation);
+      if (existing) {
+        if (now - existing.windowStartedAtMs > FAILURE_WINDOW_MS) {
+          existing.windowStartedAtMs = now;
+          existing.windowFailureCount = 0;
+          existing.windowRequestCount = 0;
+        }
+        return existing;
+      }
+      const created = {
+        consecutiveFailures: 0,
+        circuitOpenUntilMs: 0,
+        windowStartedAtMs: now,
+        windowRequestCount: 0,
+        windowFailureCount: 0,
+        totalRequests: 0,
+        totalFailures: 0
+      };
+      operationState.set(operation, created);
+      return created;
+    };
+    sleep = (ms) => new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+    markSuccess = (operation) => {
+      const state = getState(operation);
+      state.totalRequests += 1;
+      state.windowRequestCount += 1;
+      state.consecutiveFailures = 0;
+    };
+    markFailure = (operation) => {
+      const state = getState(operation);
+      state.totalRequests += 1;
+      state.totalFailures += 1;
+      state.windowRequestCount += 1;
+      state.windowFailureCount += 1;
+      state.consecutiveFailures += 1;
+      const windowFailureRate = state.windowRequestCount > 0 ? state.windowFailureCount / state.windowRequestCount : 0;
+      if (state.consecutiveFailures >= BREAKER_CONSECUTIVE_FAILURES || windowFailureRate > ERROR_BUDGET_MAX_FAILURE_RATE) {
+        state.circuitOpenUntilMs = Date.now() + BREAKER_COOLDOWN_MS;
+      }
+    };
+    isCircuitOpen = (operation) => {
+      const state = getState(operation);
+      return state.circuitOpenUntilMs > Date.now();
+    };
+    listModels = (primaryModel, fallbackModels = []) => [primaryModel, ...fallbackModels].map((item) => item.trim()).filter(Boolean).filter((item, index, list) => list.indexOf(item) === index);
+    getAiResilienceSnapshot = () => {
+      const snapshot = {};
+      for (const [operation, state] of operationState.entries()) {
+        snapshot[operation] = {
+          consecutiveFailures: state.consecutiveFailures,
+          circuitOpenUntil: state.circuitOpenUntilMs ? new Date(state.circuitOpenUntilMs).toISOString() : null,
+          windowRequestCount: state.windowRequestCount,
+          windowFailureCount: state.windowFailureCount,
+          totalRequests: state.totalRequests,
+          totalFailures: state.totalFailures,
+          errorBudgetFailureRate: state.windowRequestCount > 0 ? state.windowFailureCount / state.windowRequestCount : 0
+        };
+      }
+      return snapshot;
+    };
+    executeWithAiResilience = async (options) => {
+      const models = listModels(options.primaryModel, options.fallbackModels);
+      const maxRetries = Math.max(0, Math.min(4, Math.trunc(options.maxRetries ?? 2)));
+      const operation = options.operation;
+      if (isCircuitOpen(operation)) {
+        logger.warn("ai.circuit_open", {
+          operation,
+          circuitState: getAiResilienceSnapshot()[operation]
+        });
+        throw new Error("AI provider circuit breaker is open");
+      }
+      let lastError = null;
+      for (const model of models) {
+        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+          try {
+            const result = await options.execute(model);
+            markSuccess(operation);
+            return {
+              result,
+              model,
+              attempt
+            };
+          } catch (error) {
+            lastError = error;
+            const retriable = options.isRetriableError(error);
+            const hasAttemptsLeft = attempt < maxRetries;
+            logger.warn("ai.call_failed", {
+              operation,
+              model,
+              attempt,
+              retriable,
+              hasAttemptsLeft
+            });
+            if (!retriable || !hasAttemptsLeft) {
+              break;
+            }
+            const backoffMs = Math.min(MAX_BACKOFF_MS, 250 * 2 ** attempt + Math.floor(Math.random() * 120));
+            await sleep(backoffMs);
+          }
+        }
+      }
+      markFailure(operation);
+      throw lastError instanceof Error ? lastError : new Error("AI provider call failed");
+    };
+  }
+});
+
 // backend/src/services/openai.service.ts
 import axios from "axios";
 async function generateQuestion(role, difficulty, previousQuestions = [], category = MIXED_CATEGORY, previousCategories = []) {
@@ -58,27 +397,40 @@ Return JSON only in this format:
 `;
   const referer = process.env.FRONTEND_URL?.startsWith("http") ? process.env.FRONTEND_URL : "https://interviewpilot.app";
   try {
-    const response = await axios.post(
-      OPENROUTER_ENDPOINT,
-      {
-        model: process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
-        messages: [
-          { role: "system", content: "You are the InterviewPilot AI Interview Coach." },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.5,
-        max_tokens: RESPONSE_MAX_TOKENS
-      },
-      {
-        timeout: REQUEST_TIMEOUT_MS,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": referer,
-          "X-Title": "InterviewPilot Coach",
-          "Content-Type": "application/json"
+    const { result: response, model: selectedModel } = await executeWithAiResilience({
+      operation: "question_generation",
+      primaryModel: QUESTION_PRIMARY_MODEL,
+      fallbackModels: QUESTION_FALLBACK_MODELS,
+      maxRetries: 2,
+      execute: async (model) => axios.post(
+        OPENROUTER_ENDPOINT,
+        {
+          model,
+          messages: [
+            { role: "system", content: "You are the InterviewPilot AI Interview Coach." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.5,
+          max_tokens: RESPONSE_MAX_TOKENS
+        },
+        {
+          timeout: REQUEST_TIMEOUT_MS,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "HTTP-Referer": referer,
+            "X-Title": "InterviewPilot Coach",
+            "Content-Type": "application/json"
+          }
         }
-      }
-    );
+      ),
+      isRetriableError: isRetriableProviderError
+    });
+    logger.info("ai.question_model_selected", {
+      model: selectedModel,
+      role: safeRole,
+      difficulty: resolvedDifficulty,
+      category: resolvedCategory
+    });
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
       return buildFallbackQuestion(
@@ -102,11 +454,19 @@ Return JSON only in this format:
     if (error instanceof AiProviderError) {
       throw error;
     }
+    if (error instanceof Error && /circuit breaker is open/i.test(error.message)) {
+      return buildFallbackQuestion(
+        safeRole,
+        resolvedDifficulty,
+        resolvedCategory,
+        safePrevious.length
+      );
+    }
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const rawPayload = error.response?.data;
       const providerMessage = typeof rawPayload === "string" ? rawPayload : typeof rawPayload === "object" && rawPayload !== null ? JSON.stringify(rawPayload) : "";
-      console.error("OpenRouter question generation error", {
+      logger.error("ai.question_generation_error", {
         status,
         axiosCode: error.code,
         message: error.message,
@@ -125,7 +485,7 @@ Return JSON only in this format:
       }
       throw new AiProviderError("AI_PROVIDER_ERROR", "AI provider request failed", 502);
     }
-    console.error("Unexpected question generation error", error);
+    logger.errorWithException("ai.question_generation_unexpected_error", error);
     return buildFallbackQuestion(
       safeRole,
       resolvedDifficulty,
@@ -134,10 +494,12 @@ Return JSON only in this format:
     );
   }
 }
-var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, RESPONSE_MAX_TOKENS, MIXED_CATEGORY, SUPPORTED_DIFFICULTIES, cleanText, defaultTimeLimitByDifficulty, getCategoryPool, resolveCategory, extractJson, parseQuestion, categoryFallbacks, buildFallbackQuestion;
+var AiProviderError, OPENROUTER_ENDPOINT, DEFAULT_MODEL, REQUEST_TIMEOUT_MS, RESPONSE_MAX_TOKENS, MIXED_CATEGORY, SUPPORTED_DIFFICULTIES, QUESTION_PRIMARY_MODEL, QUESTION_FALLBACK_MODELS, isRetriableProviderError, cleanText, defaultTimeLimitByDifficulty, getCategoryPool, resolveCategory, extractJson, parseQuestion, categoryFallbacks, buildFallbackQuestion;
 var init_openai_service = __esm({
   "backend/src/services/openai.service.ts"() {
     "use strict";
+    init_aiResilience();
+    init_observability();
     AiProviderError = class extends Error {
       constructor(code, message, statusCode = 500) {
         super(message);
@@ -151,6 +513,18 @@ var init_openai_service = __esm({
     RESPONSE_MAX_TOKENS = 320;
     MIXED_CATEGORY = "Mixed";
     SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"];
+    QUESTION_PRIMARY_MODEL = process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
+    QUESTION_FALLBACK_MODELS = (process.env.OPENROUTER_QUESTION_FALLBACK_MODELS || process.env.OPENROUTER_MODEL_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
+    isRetriableProviderError = (error) => {
+      if (!axios.isAxiosError(error)) {
+        return false;
+      }
+      const status = error.response?.status;
+      if (!status) {
+        return true;
+      }
+      return status === 429 || status >= 500 || error.code === "ECONNABORTED";
+    };
     cleanText = (value, maxLength) => value.replace(/\s+/g, " ").trim().slice(0, maxLength);
     defaultTimeLimitByDifficulty = (difficulty) => {
       if (difficulty === "Easy") return 120;
@@ -341,6 +715,9 @@ var init_user = __esm({
           index: true
         },
         passwordHash: { type: String },
+        passwordHistory: { type: [String], default: [] },
+        passwordResetTokenHash: { type: String, index: true },
+        passwordResetExpiresAt: { type: Date },
         authProvider: {
           type: String,
           enum: ["local", "google"],
@@ -355,6 +732,8 @@ var init_user = __esm({
           index: true
         },
         avatarUrl: { type: String, trim: true },
+        lastLoginAt: { type: Date },
+        lastLoginFingerprint: { type: String },
         rolePreferences: { type: [String], default: [] },
         interviewHistory: { type: [String], default: [] }
       },
@@ -369,148 +748,8 @@ var init_user = __esm({
       }
       next();
     });
+    UserSchema.index({ lastLoginAt: -1 });
     user_default = mongoose.models.User || mongoose.model("User", UserSchema);
-  }
-});
-
-// backend/src/middleware/auth.middleware.ts
-import jwt from "jsonwebtoken";
-var extractToken, authMiddleware;
-var init_auth_middleware = __esm({
-  "backend/src/middleware/auth.middleware.ts"() {
-    "use strict";
-    init_user();
-    extractToken = (req) => {
-      const authHeader = req.headers.authorization;
-      const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-      return req.cookies?.token || bearerToken;
-    };
-    authMiddleware = async (req, res, next) => {
-      try {
-        const token = extractToken(req);
-        if (!token) {
-          return res.status(401).json({ message: "Not authenticated" });
-        }
-        const jwtSecret = process.env.JWT_SECRET;
-        if (!jwtSecret) {
-          return res.status(500).json({ message: "Server configuration error" });
-        }
-        const decoded = jwt.verify(token, jwtSecret);
-        const user = await user_default.findById(decoded.id).select("-passwordHash");
-        if (!user) {
-          return res.status(401).json({ message: "Invalid token" });
-        }
-        req.user = user;
-        next();
-      } catch {
-        return res.status(401).json({ message: "Invalid token" });
-      }
-    };
-  }
-});
-
-// backend/src/models/interviewSession.ts
-import mongoose2, { Schema as Schema2 } from "mongoose";
-var QAEntrySchema, InterviewSessionSchema, interviewSession_default;
-var init_interviewSession = __esm({
-  "backend/src/models/interviewSession.ts"() {
-    "use strict";
-    QAEntrySchema = new Schema2(
-      {
-        question: { type: String, required: true },
-        answer: { type: String, default: "" },
-        category: { type: String },
-        speechTranscript: { type: String, maxlength: 5e3 },
-        answerDurationSec: { type: Number, min: 0, max: 7200 },
-        cameraSnapshot: { type: String, maxlength: 45e4 },
-        recordingFileId: { type: String },
-        recordingMimeType: { type: String },
-        recordingSizeBytes: { type: Number, min: 0 },
-        feedback: {
-          technical: Number,
-          clarity: Number,
-          completeness: Number,
-          overall: Number,
-          suggestion: String,
-          strengths: [String],
-          improvements: [String]
-        }
-      },
-      { _id: false }
-    );
-    InterviewSessionSchema = new Schema2(
-      {
-        userId: { type: Schema2.Types.ObjectId, ref: "User", required: true },
-        role: { type: String, required: true },
-        difficulty: { type: String, required: true },
-        questions: { type: [QAEntrySchema], default: [] },
-        startedAt: { type: Date, default: Date.now },
-        lastActivityAt: { type: Date, default: Date.now }
-      },
-      { timestamps: true }
-    );
-    InterviewSessionSchema.index({ userId: 1, lastActivityAt: -1 });
-    interviewSession_default = mongoose2.models.InterviewSession || mongoose2.model(
-      "InterviewSession",
-      InterviewSessionSchema
-    );
-  }
-});
-
-// backend/src/middleware/validation.middleware.ts
-import { body, validationResult } from "express-validator";
-function handleValidationErrors(req, res, next) {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    const msg = errors.array().map((e) => e.msg).join("; ");
-    return res.status(400).json({ success: false, message: msg });
-  }
-  next();
-}
-var ROLE_MIN_LENGTH, ROLE_MAX_LENGTH, CATEGORY_MAX_LENGTH, QUESTION_MAX_LENGTH, ANSWER_MAX_LENGTH, TRANSCRIPT_MAX_LENGTH, CAMERA_SNAPSHOT_MAX_LENGTH, signupValidation, loginValidation, googleAuthValidation, interviewStartValidation, feedbackValidation;
-var init_validation_middleware = __esm({
-  "backend/src/middleware/validation.middleware.ts"() {
-    "use strict";
-    ROLE_MIN_LENGTH = 2;
-    ROLE_MAX_LENGTH = 80;
-    CATEGORY_MAX_LENGTH = 60;
-    QUESTION_MAX_LENGTH = 1e3;
-    ANSWER_MAX_LENGTH = 5e3;
-    TRANSCRIPT_MAX_LENGTH = 5e3;
-    CAMERA_SNAPSHOT_MAX_LENGTH = 45e4;
-    signupValidation = [
-      body("name").trim().isLength({ min: 2, max: 60 }).withMessage("Name must be between 2 and 60 characters"),
-      body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
-      body("password").isLength({ min: 8, max: 128 }).withMessage("Password must be between 8 and 128 characters").matches(/\d/).withMessage("Password must contain at least one number").matches(/[a-zA-Z]/).withMessage("Password must contain at least one letter")
-    ];
-    loginValidation = [
-      body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
-      body("password").isString().notEmpty().withMessage("Password is required")
-    ];
-    googleAuthValidation = [
-      body("credential").trim().isLength({ min: 20, max: 4096 }).withMessage("A valid Google credential is required")
-    ];
-    interviewStartValidation = [
-      body("role").optional().isString().trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
-      body("difficulty").optional().isString().trim().isIn(["Easy", "Medium", "FAANG"]).withMessage("Difficulty must be one of: Easy, Medium, FAANG"),
-      body("category").optional().isString().trim().isLength({ min: 2, max: CATEGORY_MAX_LENGTH }).withMessage(`Category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
-      body("previousQuestions").optional().isArray({ max: 20 }).withMessage("previousQuestions can contain at most 20 items"),
-      body("previousQuestions.*").optional().isString().trim().isLength({ min: 3, max: QUESTION_MAX_LENGTH }).withMessage(`Each previous question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
-      body("previousCategories").optional().isArray({ max: 20 }).withMessage("previousCategories can contain at most 20 items"),
-      body("previousCategories.*").optional().isString().trim().isLength({ min: 2, max: CATEGORY_MAX_LENGTH }).withMessage(`Each previous category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
-      body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
-    ];
-    feedbackValidation = [
-      body("role").trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
-      body("question").trim().isLength({ min: 3, max: QUESTION_MAX_LENGTH }).withMessage(`Question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
-      body("answer").trim().isLength({ min: 1, max: ANSWER_MAX_LENGTH }).withMessage(`Answer must be between 1 and ${ANSWER_MAX_LENGTH} characters`),
-      body("expectedPoints").optional().isArray({ max: 8 }).withMessage("expectedPoints can contain at most 8 items"),
-      body("expectedPoints.*").optional().isString().trim().isLength({ min: 2, max: 240 }).withMessage("Each expected point must be between 2 and 240 characters"),
-      body("speechTranscript").optional().isString().trim().isLength({ max: TRANSCRIPT_MAX_LENGTH }).withMessage(`speechTranscript can be at most ${TRANSCRIPT_MAX_LENGTH} characters`),
-      body("answerDurationSec").optional().isInt({ min: 0, max: 7200 }).withMessage("answerDurationSec must be between 0 and 7200 seconds"),
-      body("cameraSnapshot").optional().isString().isLength({ max: CAMERA_SNAPSHOT_MAX_LENGTH }).withMessage(`cameraSnapshot is too large (max ${CAMERA_SNAPSHOT_MAX_LENGTH} chars)`).matches(/^data:image\/(jpeg|jpg|png);base64,/i).withMessage("cameraSnapshot must be a base64 encoded image data URL"),
-      body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
-    ];
   }
 });
 
@@ -586,6 +825,8 @@ var init_env = __esm({
       const redisPairAllowed = redisPairProvided && isUrlAllowedForRuntime(redisRestUrlCandidate, isProduction4);
       const redisRestUrl = redisPairAllowed ? redisRestUrlCandidate : "";
       const redisRestToken = redisPairAllowed ? redisRestTokenCandidate : "";
+      const redisKeyPrefixCandidate = readEnv("REDIS_KEY_PREFIX").replace(/[:\s]+$/g, "");
+      const redisKeyPrefix4 = redisKeyPrefixCandidate || "ip";
       cachedConfig = {
         nodeEnv,
         isProduction: isProduction4,
@@ -596,15 +837,521 @@ var init_env = __esm({
         allowedCorsOrigins,
         redisRestUrl,
         redisRestToken,
-        redisConfigured: Boolean(redisRestUrl && redisRestToken)
+        redisConfigured: Boolean(redisRestUrl && redisRestToken),
+        redisKeyPrefix: redisKeyPrefix4,
+        redisMemoryPolicy: readEnv("REDIS_MEMORY_POLICY") || "allkeys-lfu",
+        redisPersistenceMode: readEnv("REDIS_PERSISTENCE_MODE") || "cache-only",
+        metricsApiKey: readEnv("METRICS_API_KEY")
       };
       return cachedConfig;
     };
   }
 });
 
+// backend/src/lib/runtimeStore.ts
+var toFiniteNumber, toInt, nowMs, InMemoryRuntimeStore, UpstashRuntimeStore, singletonStore, getRuntimeStore;
+var init_runtimeStore = __esm({
+  "backend/src/lib/runtimeStore.ts"() {
+    "use strict";
+    init_env();
+    toFiniteNumber = (value, fallback = 0) => {
+      if (typeof value === "number" && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === "string" && value.trim()) {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+      }
+      return fallback;
+    };
+    toInt = (value, fallback = 0) => Math.trunc(toFiniteNumber(value, fallback));
+    nowMs = () => Date.now();
+    InMemoryRuntimeStore = class {
+      constructor() {
+        this.isDistributed = false;
+        this.strings = /* @__PURE__ */ new Map();
+        this.lists = /* @__PURE__ */ new Map();
+        this.sortedSets = /* @__PURE__ */ new Map();
+        this.expiresAtByKey = /* @__PURE__ */ new Map();
+      }
+      hasAnyValue(key) {
+        return this.strings.has(key) || this.lists.has(key) || this.sortedSets.has(key);
+      }
+      clearKey(key) {
+        this.strings.delete(key);
+        this.lists.delete(key);
+        this.sortedSets.delete(key);
+        this.expiresAtByKey.delete(key);
+      }
+      cleanupKeyIfExpired(key) {
+        const expiresAt = this.expiresAtByKey.get(key);
+        if (!expiresAt) {
+          return;
+        }
+        if (expiresAt <= nowMs()) {
+          this.clearKey(key);
+        }
+      }
+      cleanupExpired() {
+        const now = nowMs();
+        for (const [key, expiresAt] of this.expiresAtByKey.entries()) {
+          if (expiresAt <= now) {
+            this.clearKey(key);
+          }
+        }
+      }
+      async get(key) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        return this.strings.get(key)?.value ?? null;
+      }
+      async setEx(key, value, ttlSec) {
+        this.cleanupExpired();
+        const ttlMs = Math.max(1, ttlSec) * 1e3;
+        this.strings.set(key, {
+          value,
+          expiresAt: null
+        });
+        this.expiresAtByKey.set(key, nowMs() + ttlMs);
+      }
+      async setNxEx(key, value, ttlSec) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const existing = this.strings.get(key);
+        if (existing) {
+          return false;
+        }
+        await this.setEx(key, value, ttlSec);
+        return true;
+      }
+      async del(key) {
+        this.clearKey(key);
+      }
+      async incrWithTtl(key, ttlSec) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const existing = this.strings.get(key);
+        if (!existing) {
+          await this.setEx(key, "1", ttlSec);
+          return 1;
+        }
+        const count = toInt(existing.value, 0) + 1;
+        this.strings.set(key, {
+          value: `${count}`,
+          expiresAt: null
+        });
+        return count;
+      }
+      async rpush(key, value) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const list = this.lists.get(key) ?? [];
+        list.push(value);
+        this.lists.set(key, list);
+        return list.length;
+      }
+      async lpop(key) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const list = this.lists.get(key);
+        if (!list || list.length === 0) {
+          return null;
+        }
+        const item = list.shift() ?? null;
+        if (list.length === 0) {
+          this.lists.delete(key);
+        } else {
+          this.lists.set(key, list);
+        }
+        return item;
+      }
+      async zadd(key, score, member) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const set = this.sortedSets.get(key) ?? [];
+        const filtered = set.filter((item) => item.member !== member);
+        filtered.push({ score, member });
+        filtered.sort((a, b) => a.score - b.score);
+        this.sortedSets.set(key, filtered);
+      }
+      async zrangeByScore(key, maxScore, limit) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const set = this.sortedSets.get(key) ?? [];
+        return set.filter((item) => item.score <= maxScore).slice(0, Math.max(1, limit)).map((item) => item.member);
+      }
+      async zrem(key, member) {
+        this.cleanupExpired();
+        this.cleanupKeyIfExpired(key);
+        const set = this.sortedSets.get(key) ?? [];
+        const filtered = set.filter((item) => item.member !== member);
+        if (filtered.length === 0) {
+          this.sortedSets.delete(key);
+          return;
+        }
+        this.sortedSets.set(key, filtered);
+      }
+      async expire(key, ttlSec) {
+        this.cleanupExpired();
+        if (!this.hasAnyValue(key)) {
+          return;
+        }
+        this.expiresAtByKey.set(key, nowMs() + Math.max(1, ttlSec) * 1e3);
+      }
+    };
+    UpstashRuntimeStore = class {
+      constructor(endpoint, token) {
+        this.isDistributed = true;
+        this.endpoint = endpoint.replace(/\/+$/, "");
+        this.token = token;
+      }
+      async runPipeline(commands) {
+        const response = await fetch(`${this.endpoint}/pipeline`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(commands)
+        });
+        if (!response.ok) {
+          throw new Error(`Redis pipeline failed with status ${response.status}`);
+        }
+        const payload = await response.json();
+        if (!Array.isArray(payload) || payload.some((entry) => entry?.error)) {
+          throw new Error("Redis pipeline response is invalid");
+        }
+        return payload.map((entry) => entry?.result);
+      }
+      async get(key) {
+        const [result] = await this.runPipeline([["GET", key]]);
+        return typeof result === "string" ? result : null;
+      }
+      async setEx(key, value, ttlSec) {
+        await this.runPipeline([["SET", key, value, "EX", `${Math.max(1, ttlSec)}`]]);
+      }
+      async setNxEx(key, value, ttlSec) {
+        const [result] = await this.runPipeline([
+          ["SET", key, value, "EX", `${Math.max(1, ttlSec)}`, "NX"]
+        ]);
+        return typeof result === "string" && result.toUpperCase() === "OK";
+      }
+      async del(key) {
+        await this.runPipeline([["DEL", key]]);
+      }
+      async incrWithTtl(key, ttlSec) {
+        const [countResult] = await this.runPipeline([
+          ["INCR", key],
+          ["EXPIRE", key, `${Math.max(1, ttlSec)}`, "NX"]
+        ]);
+        return Math.max(1, toInt(countResult, 1));
+      }
+      async rpush(key, value) {
+        const [result] = await this.runPipeline([["RPUSH", key, value]]);
+        return Math.max(0, toInt(result, 0));
+      }
+      async lpop(key) {
+        const [result] = await this.runPipeline([["LPOP", key]]);
+        return typeof result === "string" ? result : null;
+      }
+      async zadd(key, score, member) {
+        await this.runPipeline([["ZADD", key, `${Math.trunc(score)}`, member]]);
+      }
+      async zrangeByScore(key, maxScore, limit) {
+        const [result] = await this.runPipeline([
+          ["ZRANGEBYSCORE", key, "-inf", `${Math.trunc(maxScore)}`, "LIMIT", "0", `${Math.max(1, limit)}`]
+        ]);
+        if (!Array.isArray(result)) {
+          return [];
+        }
+        return result.filter((item) => typeof item === "string");
+      }
+      async zrem(key, member) {
+        await this.runPipeline([["ZREM", key, member]]);
+      }
+      async expire(key, ttlSec) {
+        await this.runPipeline([["EXPIRE", key, `${Math.max(1, ttlSec)}`]]);
+      }
+    };
+    singletonStore = null;
+    getRuntimeStore = () => {
+      if (singletonStore) {
+        return singletonStore;
+      }
+      const { redisRestUrl, redisRestToken } = getEnvConfig();
+      if (redisRestUrl && redisRestToken) {
+        singletonStore = new UpstashRuntimeStore(redisRestUrl, redisRestToken);
+        return singletonStore;
+      }
+      singletonStore = new InMemoryRuntimeStore();
+      return singletonStore;
+    };
+  }
+});
+
+// backend/src/lib/authRuntimeStore.ts
+import crypto2 from "crypto";
+var redisKeyPrefix, AUTH_NAMESPACE, REFRESH_SESSION_PREFIX, TOKEN_REVOKE_PREFIX, SUSPICIOUS_LOGIN_PREFIX, runtimeStore, stableHash, safeText, buildRefreshSessionKey, buildRevokedTokenKey, suspiciousIdentityKey, hashAuthToken, buildLoginFingerprint, storeRefreshSession, getRefreshSession, deleteRefreshSession, revokeTokenByJti, isTokenRevoked, incrementSuspiciousLogin;
+var init_authRuntimeStore = __esm({
+  "backend/src/lib/authRuntimeStore.ts"() {
+    "use strict";
+    init_runtimeStore();
+    init_env();
+    ({ redisKeyPrefix } = getEnvConfig());
+    AUTH_NAMESPACE = `${redisKeyPrefix}:auth`;
+    REFRESH_SESSION_PREFIX = `${AUTH_NAMESPACE}:refresh`;
+    TOKEN_REVOKE_PREFIX = `${AUTH_NAMESPACE}:revoked`;
+    SUSPICIOUS_LOGIN_PREFIX = `${AUTH_NAMESPACE}:suspicious`;
+    runtimeStore = getRuntimeStore();
+    stableHash = (value) => crypto2.createHash("sha256").update(value).digest("hex");
+    safeText = (value) => value.trim().toLowerCase();
+    buildRefreshSessionKey = (sessionId) => `${REFRESH_SESSION_PREFIX}:${sessionId}`;
+    buildRevokedTokenKey = (jti) => `${TOKEN_REVOKE_PREFIX}:${jti}`;
+    suspiciousIdentityKey = (email, ipAddress) => `${SUSPICIOUS_LOGIN_PREFIX}:${stableHash(`${safeText(email)}|${safeText(ipAddress)}`)}`;
+    hashAuthToken = (token) => stableHash(token.trim());
+    buildLoginFingerprint = (params) => stableHash(safeText(params.userAgent) || safeText(params.ipAddress));
+    storeRefreshSession = async (params) => {
+      const payload = {
+        sessionId: params.sessionId,
+        userId: params.userId,
+        refreshTokenHash: params.refreshTokenHash,
+        fingerprint: params.fingerprint,
+        createdAt: Date.now(),
+        rotatedAt: Date.now()
+      };
+      await runtimeStore.setEx(
+        buildRefreshSessionKey(params.sessionId),
+        JSON.stringify(payload),
+        Math.max(60, params.ttlSec)
+      );
+    };
+    getRefreshSession = async (sessionId) => {
+      const raw = await runtimeStore.get(buildRefreshSessionKey(sessionId));
+      if (!raw) {
+        return null;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.sessionId !== "string" || typeof parsed.userId !== "string" || typeof parsed.refreshTokenHash !== "string" || typeof parsed.fingerprint !== "string") {
+          return null;
+        }
+        return {
+          sessionId: parsed.sessionId,
+          userId: parsed.userId,
+          refreshTokenHash: parsed.refreshTokenHash,
+          fingerprint: parsed.fingerprint,
+          createdAt: typeof parsed.createdAt === "number" && Number.isFinite(parsed.createdAt) ? parsed.createdAt : Date.now(),
+          rotatedAt: typeof parsed.rotatedAt === "number" && Number.isFinite(parsed.rotatedAt) ? parsed.rotatedAt : Date.now()
+        };
+      } catch {
+        return null;
+      }
+    };
+    deleteRefreshSession = async (sessionId) => {
+      await runtimeStore.del(buildRefreshSessionKey(sessionId));
+    };
+    revokeTokenByJti = async (params) => {
+      if (!params.jti.trim()) {
+        return;
+      }
+      await runtimeStore.setEx(
+        buildRevokedTokenKey(params.jti.trim()),
+        params.reason.slice(0, 120) || "revoked",
+        Math.max(60, params.ttlSec)
+      );
+    };
+    isTokenRevoked = async (jti) => {
+      if (!jti.trim()) {
+        return false;
+      }
+      const value = await runtimeStore.get(buildRevokedTokenKey(jti.trim()));
+      return Boolean(value);
+    };
+    incrementSuspiciousLogin = async (params) => {
+      const key = suspiciousIdentityKey(params.email, params.ipAddress);
+      return runtimeStore.incrWithTtl(key, Math.max(300, params.ttlSec ?? 3600));
+    };
+  }
+});
+
+// backend/src/middleware/auth.middleware.ts
+import jwt from "jsonwebtoken";
+var extractToken, decodeAccessToken, authMiddleware;
+var init_auth_middleware = __esm({
+  "backend/src/middleware/auth.middleware.ts"() {
+    "use strict";
+    init_user();
+    init_authRuntimeStore();
+    extractToken = (req) => {
+      const authHeader = req.headers.authorization;
+      const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      return (req.cookies?.token || bearerToken).trim();
+    };
+    decodeAccessToken = (token) => {
+      const jwtSecret = (process.env.JWT_SECRET ?? "").trim();
+      if (!jwtSecret) {
+        throw new Error("Server configuration error");
+      }
+      const decoded = jwt.verify(token, jwtSecret, {
+        algorithms: ["HS256"]
+      });
+      const userId = typeof decoded.id === "string" ? decoded.id : "";
+      if (!userId) {
+        throw new Error("Invalid token payload");
+      }
+      const tokenType = typeof decoded.type === "string" ? decoded.type : "";
+      if (tokenType && tokenType !== "access") {
+        throw new Error("Invalid token type");
+      }
+      return {
+        userId,
+        jti: typeof decoded.jti === "string" ? decoded.jti : ""
+      };
+    };
+    authMiddleware = async (req, res, next) => {
+      try {
+        const token = extractToken(req);
+        if (!token) {
+          return res.status(401).json({ message: "Not authenticated" });
+        }
+        const decoded = decodeAccessToken(token);
+        if (decoded.jti && await isTokenRevoked(decoded.jti)) {
+          return res.status(401).json({ message: "Token has been revoked" });
+        }
+        const user = await user_default.findById(decoded.userId).select(
+          "-passwordHash -passwordHistory -passwordResetTokenHash -passwordResetExpiresAt"
+        );
+        if (!user) {
+          return res.status(401).json({ message: "Invalid token" });
+        }
+        req.user = user;
+        next();
+      } catch {
+        return res.status(401).json({ message: "Invalid token" });
+      }
+    };
+  }
+});
+
+// backend/src/models/interviewSession.ts
+import mongoose2, { Schema as Schema2 } from "mongoose";
+var QAEntrySchema, InterviewSessionSchema, interviewSession_default;
+var init_interviewSession = __esm({
+  "backend/src/models/interviewSession.ts"() {
+    "use strict";
+    QAEntrySchema = new Schema2(
+      {
+        question: { type: String, required: true },
+        answer: { type: String, default: "" },
+        category: { type: String },
+        speechTranscript: { type: String, maxlength: 5e3 },
+        answerDurationSec: { type: Number, min: 0, max: 7200 },
+        cameraSnapshot: { type: String, maxlength: 45e4 },
+        recordingFileId: { type: String },
+        recordingMimeType: { type: String },
+        recordingSizeBytes: { type: Number, min: 0 },
+        feedback: {
+          technical: Number,
+          clarity: Number,
+          completeness: Number,
+          overall: Number,
+          suggestion: String,
+          strengths: [String],
+          improvements: [String]
+        }
+      },
+      { _id: false }
+    );
+    InterviewSessionSchema = new Schema2(
+      {
+        userId: { type: Schema2.Types.ObjectId, ref: "User", required: true },
+        role: { type: String, required: true },
+        difficulty: { type: String, required: true },
+        questions: { type: [QAEntrySchema], default: [] },
+        startedAt: { type: Date, default: Date.now },
+        lastActivityAt: { type: Date, default: Date.now }
+      },
+      { timestamps: true }
+    );
+    InterviewSessionSchema.index({ userId: 1, lastActivityAt: -1 });
+    InterviewSessionSchema.index({ userId: 1, role: 1, lastActivityAt: -1 });
+    InterviewSessionSchema.index({ userId: 1, _id: -1 });
+    interviewSession_default = mongoose2.models.InterviewSession || mongoose2.model(
+      "InterviewSession",
+      InterviewSessionSchema
+    );
+  }
+});
+
+// backend/src/middleware/validation.middleware.ts
+import { body, validationResult } from "express-validator";
+function handleValidationErrors(req, res, next) {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    const msg = errors.array().map((e) => e.msg).join("; ");
+    return res.status(400).json({ success: false, message: msg });
+  }
+  next();
+}
+var ROLE_MIN_LENGTH, ROLE_MAX_LENGTH, CATEGORY_MAX_LENGTH, QUESTION_MAX_LENGTH, ANSWER_MAX_LENGTH, TRANSCRIPT_MAX_LENGTH, CAMERA_SNAPSHOT_MAX_LENGTH, RESET_TOKEN_MIN_LENGTH, RESET_TOKEN_MAX_LENGTH, signupValidation, loginValidation, forgotPasswordValidation, resetPasswordValidation, googleAuthValidation, interviewStartValidation, feedbackValidation;
+var init_validation_middleware = __esm({
+  "backend/src/middleware/validation.middleware.ts"() {
+    "use strict";
+    ROLE_MIN_LENGTH = 2;
+    ROLE_MAX_LENGTH = 80;
+    CATEGORY_MAX_LENGTH = 60;
+    QUESTION_MAX_LENGTH = 1e3;
+    ANSWER_MAX_LENGTH = 5e3;
+    TRANSCRIPT_MAX_LENGTH = 5e3;
+    CAMERA_SNAPSHOT_MAX_LENGTH = 45e4;
+    RESET_TOKEN_MIN_LENGTH = 40;
+    RESET_TOKEN_MAX_LENGTH = 200;
+    signupValidation = [
+      body("name").trim().isLength({ min: 2, max: 60 }).withMessage("Name must be between 2 and 60 characters"),
+      body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
+      body("password").isLength({ min: 12, max: 128 }).withMessage("Password must be between 12 and 128 characters").matches(/[A-Z]/).withMessage("Password must contain at least one uppercase letter").matches(/[a-z]/).withMessage("Password must contain at least one lowercase letter").matches(/\d/).withMessage("Password must contain at least one number").matches(/[^A-Za-z0-9]/).withMessage("Password must contain at least one special character").not().matches(/\s/).withMessage("Password cannot include spaces")
+    ];
+    loginValidation = [
+      body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
+      body("password").isString().notEmpty().withMessage("Password is required")
+    ];
+    forgotPasswordValidation = [
+      body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required")
+    ];
+    resetPasswordValidation = [
+      body("token").trim().isLength({ min: RESET_TOKEN_MIN_LENGTH, max: RESET_TOKEN_MAX_LENGTH }).withMessage("A valid password reset token is required"),
+      body("password").isLength({ min: 12, max: 128 }).withMessage("Password must be between 12 and 128 characters").matches(/[A-Z]/).withMessage("Password must contain at least one uppercase letter").matches(/[a-z]/).withMessage("Password must contain at least one lowercase letter").matches(/\d/).withMessage("Password must contain at least one number").matches(/[^A-Za-z0-9]/).withMessage("Password must contain at least one special character").not().matches(/\s/).withMessage("Password cannot include spaces")
+    ];
+    googleAuthValidation = [
+      body("credential").trim().isLength({ min: 20, max: 4096 }).withMessage("A valid Google credential is required")
+    ];
+    interviewStartValidation = [
+      body("role").optional().isString().trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
+      body("difficulty").optional().isString().trim().isIn(["Easy", "Medium", "FAANG"]).withMessage("Difficulty must be one of: Easy, Medium, FAANG"),
+      body("category").optional().isString().trim().isLength({ min: 2, max: CATEGORY_MAX_LENGTH }).withMessage(`Category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
+      body("previousQuestions").optional().isArray({ max: 20 }).withMessage("previousQuestions can contain at most 20 items"),
+      body("previousQuestions.*").optional().isString().trim().isLength({ min: 3, max: QUESTION_MAX_LENGTH }).withMessage(`Each previous question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
+      body("previousCategories").optional().isArray({ max: 20 }).withMessage("previousCategories can contain at most 20 items"),
+      body("previousCategories.*").optional().isString().trim().isLength({ min: 2, max: CATEGORY_MAX_LENGTH }).withMessage(`Each previous category must be between 2 and ${CATEGORY_MAX_LENGTH} characters`),
+      body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
+    ];
+    feedbackValidation = [
+      body("role").trim().isLength({ min: ROLE_MIN_LENGTH, max: ROLE_MAX_LENGTH }).withMessage(`Role must be between ${ROLE_MIN_LENGTH} and ${ROLE_MAX_LENGTH} characters`),
+      body("question").trim().isLength({ min: 3, max: QUESTION_MAX_LENGTH }).withMessage(`Question must be between 3 and ${QUESTION_MAX_LENGTH} characters`),
+      body("answer").trim().isLength({ min: 1, max: ANSWER_MAX_LENGTH }).withMessage(`Answer must be between 1 and ${ANSWER_MAX_LENGTH} characters`),
+      body("expectedPoints").optional().isArray({ max: 8 }).withMessage("expectedPoints can contain at most 8 items"),
+      body("expectedPoints.*").optional().isString().trim().isLength({ min: 2, max: 240 }).withMessage("Each expected point must be between 2 and 240 characters"),
+      body("speechTranscript").optional().isString().trim().isLength({ max: TRANSCRIPT_MAX_LENGTH }).withMessage(`speechTranscript can be at most ${TRANSCRIPT_MAX_LENGTH} characters`),
+      body("answerDurationSec").optional().isInt({ min: 0, max: 7200 }).withMessage("answerDurationSec must be between 0 and 7200 seconds"),
+      body("cameraSnapshot").optional().isString().isLength({ max: CAMERA_SNAPSHOT_MAX_LENGTH }).withMessage(`cameraSnapshot is too large (max ${CAMERA_SNAPSHOT_MAX_LENGTH} chars)`).matches(/^data:image\/(jpeg|jpg|png);base64,/i).withMessage("cameraSnapshot must be a base64 encoded image data URL"),
+      body("sessionQuestionIndex").optional().isInt({ min: 0, max: 200 }).withMessage("sessionQuestionIndex must be between 0 and 200"),
+      body("sessionId").optional().isMongoId().withMessage("sessionId must be a valid identifier")
+    ];
+  }
+});
+
 // backend/src/lib/rateLimitStore.ts
-var asNumber, InMemoryRateLimitStore, UpstashRedisRateLimitStore, singletonStore, getRateLimitStore;
+var asNumber, InMemoryRateLimitStore, UpstashRedisRateLimitStore, singletonStore2, getRateLimitStore;
 var init_rateLimitStore = __esm({
   "backend/src/lib/rateLimitStore.ts"() {
     "use strict";
@@ -632,7 +1379,8 @@ var init_rateLimitStore = __esm({
       }
       async consume(params) {
         const now = Date.now();
-        const namespacedKey = `${params.bucket}:${params.key}`;
+        const { redisKeyPrefix: redisKeyPrefix4 } = getEnvConfig();
+        const namespacedKey = `${redisKeyPrefix4}:${params.bucket}:${params.key}`;
         const existing = this.buckets.get(namespacedKey);
         if (!existing || existing.resetAt <= now) {
           const resetAt = now + params.windowMs;
@@ -662,7 +1410,8 @@ var init_rateLimitStore = __esm({
       }
       async consume(params) {
         const now = Date.now();
-        const key = `${params.bucket}:${params.key}`;
+        const { redisKeyPrefix: redisKeyPrefix4 } = getEnvConfig();
+        const key = `${redisKeyPrefix4}:${params.bucket}:${params.key}`;
         const response = await fetch(`${this.endpoint}/pipeline`, {
           method: "POST",
           headers: {
@@ -697,18 +1446,18 @@ var init_rateLimitStore = __esm({
         };
       }
     };
-    singletonStore = null;
+    singletonStore2 = null;
     getRateLimitStore = () => {
-      if (singletonStore) {
-        return singletonStore;
+      if (singletonStore2) {
+        return singletonStore2;
       }
       const { redisRestUrl, redisRestToken } = getEnvConfig();
       if (redisRestUrl && redisRestToken) {
-        singletonStore = new UpstashRedisRateLimitStore(redisRestUrl, redisRestToken);
-        return singletonStore;
+        singletonStore2 = new UpstashRedisRateLimitStore(redisRestUrl, redisRestToken);
+        return singletonStore2;
       }
-      singletonStore = new InMemoryRateLimitStore();
-      return singletonStore;
+      singletonStore2 = new InMemoryRateLimitStore();
+      return singletonStore2;
     };
   }
 });
@@ -853,7 +1602,8 @@ var init_interview_routes = __esm({
               message: "Session not found"
             });
           }
-          return res.json({ question, sessionId: session._id });
+          const questionIndex = Math.max(0, session.questions.length - 1);
+          return res.json({ question, sessionId: session._id, questionIndex });
         } catch (error) {
           const isProduction4 = process.env.NODE_ENV === "production";
           if (error instanceof AiProviderError) {
@@ -938,27 +1688,38 @@ Answer: ${safeAnswer}
 `;
   const referer = process.env.FRONTEND_URL?.startsWith("http") ? process.env.FRONTEND_URL : "https://interviewpilot.app";
   try {
-    const response = await axios2.post(
-      OPENROUTER_ENDPOINT2,
-      {
-        model: process.env.OPENROUTER_FEEDBACK_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL2,
-        messages: [
-          { role: "system", content: "You are a strict and accurate interview evaluator." },
-          { role: "user", content: prompt }
-        ],
-        temperature: 0.1,
-        max_tokens: RESPONSE_MAX_TOKENS2
-      },
-      {
-        timeout: requestTimeoutMs,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": referer,
-          "X-Title": "InterviewPilot Coach",
-          "Content-Type": "application/json"
+    const { result: response, model: selectedModel } = await executeWithAiResilience({
+      operation: "feedback_evaluation",
+      primaryModel: FEEDBACK_PRIMARY_MODEL,
+      fallbackModels: FEEDBACK_FALLBACK_MODELS,
+      maxRetries: 2,
+      execute: async (model) => axios2.post(
+        OPENROUTER_ENDPOINT2,
+        {
+          model,
+          messages: [
+            { role: "system", content: "You are a strict and accurate interview evaluator." },
+            { role: "user", content: prompt }
+          ],
+          temperature: 0.1,
+          max_tokens: RESPONSE_MAX_TOKENS2
+        },
+        {
+          timeout: requestTimeoutMs,
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "HTTP-Referer": referer,
+            "X-Title": "InterviewPilot Coach",
+            "Content-Type": "application/json"
+          }
         }
-      }
-    );
+      ),
+      isRetriableError: isRetriableProviderError2
+    });
+    logger.info("ai.feedback_model_selected", {
+      model: selectedModel,
+      role: safeRole
+    });
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
       return heuristicResult;
@@ -974,22 +1735,30 @@ Answer: ${safeAnswer}
     };
   } catch (error) {
     if (axios2.isAxiosError(error)) {
-      console.warn("Feedback provider fallback used", {
+      logger.warn("ai.feedback_provider_fallback_used", {
         status: error.response?.status,
         code: error.code
+      });
+    } else if (error instanceof Error) {
+      logger.warn("ai.feedback_provider_fallback_used", {
+        message: error.message
       });
     }
     return heuristicResult;
   }
 }
-var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, DEFAULT_REQUEST_TIMEOUT_MS, RESPONSE_MAX_TOKENS2, STOP_WORDS, cleanText2, normalizeText, clampScore, roundToOneDecimal, extractJson2, sanitizeList, toMeaningfulTokens, uniqueRatio, extractKeywords, topicalityScore, hasLowConfidenceLanguage, matchesExpectedPoint, buildHeuristicAssessment, calibrateFeedback, parseFeedback, generateHeuristicFeedback;
+var OPENROUTER_ENDPOINT2, DEFAULT_MODEL2, DEFAULT_REQUEST_TIMEOUT_MS, RESPONSE_MAX_TOKENS2, FEEDBACK_PRIMARY_MODEL, FEEDBACK_FALLBACK_MODELS, STOP_WORDS, cleanText2, normalizeText, clampScore, roundToOneDecimal, extractJson2, sanitizeList, toMeaningfulTokens, uniqueRatio, extractKeywords, topicalityScore, hasLowConfidenceLanguage, matchesExpectedPoint, buildHeuristicAssessment, calibrateFeedback, parseFeedback, isRetriableProviderError2, generateHeuristicFeedback;
 var init_feedback_service = __esm({
   "backend/src/services/feedback.service.ts"() {
     "use strict";
+    init_aiResilience();
+    init_observability();
     OPENROUTER_ENDPOINT2 = "https://openrouter.ai/api/v1/chat/completions";
     DEFAULT_MODEL2 = "meta-llama/llama-3.1-8b-instruct:free";
     DEFAULT_REQUEST_TIMEOUT_MS = Number.parseInt(process.env.FEEDBACK_PROVIDER_TIMEOUT_MS ?? "5200", 10);
     RESPONSE_MAX_TOKENS2 = 450;
+    FEEDBACK_PRIMARY_MODEL = process.env.OPENROUTER_FEEDBACK_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL2;
+    FEEDBACK_FALLBACK_MODELS = (process.env.OPENROUTER_FEEDBACK_FALLBACK_MODELS || process.env.OPENROUTER_MODEL_FALLBACKS || "").split(",").map((item) => item.trim()).filter(Boolean);
     STOP_WORDS = /* @__PURE__ */ new Set([
       "the",
       "and",
@@ -1314,6 +2083,16 @@ var init_feedback_service = __esm({
         return null;
       }
     };
+    isRetriableProviderError2 = (error) => {
+      if (!axios2.isAxiosError(error)) {
+        return false;
+      }
+      const status = error.response?.status;
+      if (!status) {
+        return true;
+      }
+      return status === 429 || status >= 500 || error.code === "ECONNABORTED";
+    };
     generateHeuristicFeedback = (role, question, answer, expectedPoints = []) => {
       const safeRole = cleanText2(role || "Software Engineer", 80);
       const safeQuestion = cleanText2(question, 1e3);
@@ -1389,14 +2168,15 @@ var init_feedbackJob = __esm({
         },
         expiresAt: {
           type: Date,
-          default: () => new Date(Date.now() + 1e3 * 60 * 60 * 24),
-          index: true
+          default: () => new Date(Date.now() + 1e3 * 60 * 60 * 24)
         }
       },
       { timestamps: true }
     );
     FeedbackJobSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
     FeedbackJobSchema.index({ userId: 1, createdAt: -1 });
+    FeedbackJobSchema.index({ userId: 1, status: 1, createdAt: -1 });
+    FeedbackJobSchema.index({ sessionId: 1, sessionQuestionIndex: 1, createdAt: -1 });
     FeedbackJobSchema.index({ status: 1, processingStartedAt: 1 });
     feedbackJob_default = mongoose3.models.FeedbackJob || mongoose3.model("FeedbackJob", FeedbackJobSchema);
   }
@@ -1404,16 +2184,178 @@ var init_feedbackJob = __esm({
 
 // backend/src/services/feedbackJob.service.ts
 import mongoose4 from "mongoose";
-var JOB_PROCESS_STALE_MS, JOB_PROVIDER_TIMEOUT_MS, normalizedText, resolveTargetQuestionIndex, persistFeedbackToSession, resolveSessionQuestionIndex, createFeedbackJob, claimFeedbackJob, processFeedbackJob, getFeedbackJob, getFeedbackJobStatus, startFeedbackJobProcessing, mapJobToApiResponse;
+var JOB_PROCESS_STALE_MS, JOB_PROVIDER_TIMEOUT_MS, redisKeyPrefix2, JOB_QUEUE_NAMESPACE, JOB_QUEUE_READY_KEY, JOB_QUEUE_RETRY_KEY, JOB_QUEUE_DLQ_KEY, JOB_QUEUE_MARKER_PREFIX, JOB_QUEUE_POLL_MS, JOB_QUEUE_MAX_RETRIES, JOB_QUEUE_RETRY_BASE_MS, JOB_QUEUE_KEY_TTL_SEC, JOB_QUEUE_MARKER_TTL_SEC, normalizedText, runtimeStore2, queueWorkerTimer, queueWorkerActive, parseQueuePayload, getQueueMarkerKey, enqueueQueuePayload, moveDueRetryJobsToReady, queueRetry, queueDeadLetter, markJobFailed, enqueueFeedbackJob, processQueuePayload, runQueueWorkerTick, ensureQueueWorkerRunning, resolveTargetQuestionIndex, persistFeedbackToSession, resolveSessionQuestionIndex, createFeedbackJob, claimFeedbackJob, processFeedbackJob, getFeedbackJob, getFeedbackJobStatus, startFeedbackJobProcessing, startFeedbackQueueWorker, mapJobToApiResponse;
 var init_feedbackJob_service = __esm({
   "backend/src/services/feedbackJob.service.ts"() {
     "use strict";
     init_feedbackJob();
     init_interviewSession();
+    init_runtimeStore();
+    init_env();
     init_feedback_service();
     JOB_PROCESS_STALE_MS = 3e4;
     JOB_PROVIDER_TIMEOUT_MS = 5200;
+    ({ redisKeyPrefix: redisKeyPrefix2 } = getEnvConfig());
+    JOB_QUEUE_NAMESPACE = `${redisKeyPrefix2}:queue:feedback`;
+    JOB_QUEUE_READY_KEY = `${JOB_QUEUE_NAMESPACE}:ready`;
+    JOB_QUEUE_RETRY_KEY = `${JOB_QUEUE_NAMESPACE}:retry`;
+    JOB_QUEUE_DLQ_KEY = `${JOB_QUEUE_NAMESPACE}:dead`;
+    JOB_QUEUE_MARKER_PREFIX = `${JOB_QUEUE_NAMESPACE}:marker`;
+    JOB_QUEUE_POLL_MS = 750;
+    JOB_QUEUE_MAX_RETRIES = 3;
+    JOB_QUEUE_RETRY_BASE_MS = 2e3;
+    JOB_QUEUE_KEY_TTL_SEC = 60 * 60 * 24;
+    JOB_QUEUE_MARKER_TTL_SEC = 60 * 30;
     normalizedText = (value) => value.replace(/\s+/g, " ").trim().toLowerCase();
+    runtimeStore2 = getRuntimeStore();
+    queueWorkerTimer = null;
+    queueWorkerActive = false;
+    parseQueuePayload = (value) => {
+      try {
+        const parsed = JSON.parse(value);
+        if (typeof parsed.jobId !== "string" || typeof parsed.userId !== "string" || typeof parsed.attempt !== "number") {
+          return null;
+        }
+        return {
+          jobId: parsed.jobId,
+          userId: parsed.userId,
+          attempt: Math.max(0, Math.trunc(parsed.attempt)),
+          queuedAt: typeof parsed.queuedAt === "number" && Number.isFinite(parsed.queuedAt) ? Math.trunc(parsed.queuedAt) : Date.now()
+        };
+      } catch {
+        return null;
+      }
+    };
+    getQueueMarkerKey = (jobId) => `${JOB_QUEUE_MARKER_PREFIX}:${jobId}`;
+    enqueueQueuePayload = async (payload) => {
+      await runtimeStore2.rpush(JOB_QUEUE_READY_KEY, JSON.stringify(payload));
+      await runtimeStore2.expire(JOB_QUEUE_READY_KEY, JOB_QUEUE_KEY_TTL_SEC);
+    };
+    moveDueRetryJobsToReady = async () => {
+      const now = Date.now();
+      const due = await runtimeStore2.zrangeByScore(JOB_QUEUE_RETRY_KEY, now, 20);
+      if (due.length === 0) {
+        return;
+      }
+      for (const raw of due) {
+        await runtimeStore2.zrem(JOB_QUEUE_RETRY_KEY, raw);
+        await runtimeStore2.rpush(JOB_QUEUE_READY_KEY, raw);
+      }
+      await runtimeStore2.expire(JOB_QUEUE_READY_KEY, JOB_QUEUE_KEY_TTL_SEC);
+    };
+    queueRetry = async (payload) => {
+      const nextAttempt = payload.attempt + 1;
+      const backoffMs = JOB_QUEUE_RETRY_BASE_MS * Math.max(1, 2 ** payload.attempt);
+      const jitterMs = Math.floor(Math.random() * 300);
+      const nextRunAt = Date.now() + backoffMs + jitterMs;
+      await runtimeStore2.zadd(
+        JOB_QUEUE_RETRY_KEY,
+        nextRunAt,
+        JSON.stringify({
+          ...payload,
+          attempt: nextAttempt,
+          queuedAt: Date.now()
+        })
+      );
+      await runtimeStore2.expire(JOB_QUEUE_RETRY_KEY, JOB_QUEUE_KEY_TTL_SEC);
+      await runtimeStore2.expire(getQueueMarkerKey(payload.jobId), JOB_QUEUE_MARKER_TTL_SEC);
+    };
+    queueDeadLetter = async (payload, reason) => {
+      const deadPayload = {
+        ...payload,
+        reason,
+        failedAt: Date.now()
+      };
+      await runtimeStore2.rpush(JOB_QUEUE_DLQ_KEY, JSON.stringify(deadPayload));
+      await runtimeStore2.expire(JOB_QUEUE_DLQ_KEY, JOB_QUEUE_KEY_TTL_SEC);
+    };
+    markJobFailed = async (jobId, userId, reason) => {
+      await feedbackJob_default.findOneAndUpdate(
+        { _id: jobId, userId },
+        {
+          status: "failed",
+          lastError: reason.slice(0, 280),
+          $unset: { processingStartedAt: 1 }
+        }
+      );
+    };
+    enqueueFeedbackJob = async (params) => {
+      const { jobId, userId, force = false } = params;
+      const attempt = Math.max(0, Math.trunc(params.attempt ?? 0));
+      if (!mongoose4.isValidObjectId(jobId)) {
+        return false;
+      }
+      ensureQueueWorkerRunning();
+      const markerKey = getQueueMarkerKey(jobId);
+      const acquired = await runtimeStore2.setNxEx(markerKey, "1", JOB_QUEUE_MARKER_TTL_SEC);
+      if (!acquired && !force) {
+        return false;
+      }
+      if (!acquired && force) {
+        await runtimeStore2.expire(markerKey, JOB_QUEUE_MARKER_TTL_SEC);
+      }
+      await enqueueQueuePayload({
+        jobId,
+        userId,
+        attempt,
+        queuedAt: Date.now()
+      });
+      return true;
+    };
+    processQueuePayload = async (payload) => {
+      try {
+        const result = await processFeedbackJob(payload.jobId, payload.userId);
+        if (result?.status === "completed" || result?.status === "failed") {
+          await runtimeStore2.del(getQueueMarkerKey(payload.jobId));
+          return;
+        }
+        if (payload.attempt >= JOB_QUEUE_MAX_RETRIES) {
+          await queueDeadLetter(payload, "max_retries_exceeded");
+          await markJobFailed(payload.jobId, payload.userId, "max_retries_exceeded");
+          await runtimeStore2.del(getQueueMarkerKey(payload.jobId));
+          return;
+        }
+        await queueRetry(payload);
+      } catch (error) {
+        if (payload.attempt >= JOB_QUEUE_MAX_RETRIES) {
+          const reason = error instanceof Error ? error.message : "processing_failed";
+          await queueDeadLetter(payload, reason.slice(0, 280));
+          await markJobFailed(payload.jobId, payload.userId, reason);
+          await runtimeStore2.del(getQueueMarkerKey(payload.jobId));
+          return;
+        }
+        await queueRetry(payload);
+      }
+    };
+    runQueueWorkerTick = async () => {
+      if (queueWorkerActive) {
+        return;
+      }
+      queueWorkerActive = true;
+      try {
+        await moveDueRetryJobsToReady();
+        const rawPayload = await runtimeStore2.lpop(JOB_QUEUE_READY_KEY);
+        if (!rawPayload) {
+          return;
+        }
+        const payload = parseQueuePayload(rawPayload);
+        if (!payload) {
+          return;
+        }
+        await processQueuePayload(payload);
+      } finally {
+        queueWorkerActive = false;
+      }
+    };
+    ensureQueueWorkerRunning = () => {
+      if (queueWorkerTimer) {
+        return;
+      }
+      queueWorkerTimer = setInterval(() => {
+        void runQueueWorkerTick();
+      }, JOB_QUEUE_POLL_MS);
+      queueWorkerTimer.unref();
+    };
     resolveTargetQuestionIndex = (questions, question, preferredIndex) => {
       const normalizedQuestion = normalizedText(question);
       if (typeof preferredIndex === "number" && preferredIndex >= 0 && preferredIndex < questions.length && normalizedText(questions[preferredIndex].question) === normalizedQuestion) {
@@ -1455,13 +2397,17 @@ var init_feedbackJob_service = __esm({
       if (!session || session.questions.length === 0) {
         return;
       }
+      const sanitizedAnswer = typeof answer === "string" ? answer.trim() : "";
+      if (!sanitizedAnswer) {
+        return;
+      }
       const targetIndex = resolveTargetQuestionIndex(
         session.questions,
         question,
         sessionQuestionIndex
       );
       const targetEntry = session.questions[targetIndex];
-      targetEntry.answer = answer;
+      targetEntry.answer = sanitizedAnswer;
       targetEntry.feedback = result.feedback;
       if (typeof speechTranscript === "string" && speechTranscript.trim()) {
         targetEntry.speechTranscript = speechTranscript.trim().slice(0, 5e3);
@@ -1498,6 +2444,12 @@ var init_feedbackJob_service = __esm({
       if (!session || session.questions.length === 0) {
         return void 0;
       }
+      if (Number.isInteger(params.sessionQuestionIndex) && typeof params.sessionQuestionIndex === "number" && params.sessionQuestionIndex >= 0 && params.sessionQuestionIndex < session.questions.length) {
+        const preferredEntry = session.questions[params.sessionQuestionIndex];
+        if (normalizedText(preferredEntry.question) === normalizedText(params.question)) {
+          return params.sessionQuestionIndex;
+        }
+      }
       return resolveTargetQuestionIndex(session.questions, params.question);
     };
     createFeedbackJob = async (params) => {
@@ -1510,7 +2462,8 @@ var init_feedbackJob_service = __esm({
       const sessionQuestionIndex = await resolveSessionQuestionIndex({
         userId: params.userId,
         sessionId: params.sessionId,
-        question: params.question
+        question: params.question,
+        sessionQuestionIndex: params.sessionQuestionIndex
       });
       const job = await feedbackJob_default.create({
         userId: params.userId,
@@ -1639,25 +2592,38 @@ var init_feedbackJob_service = __esm({
       });
     };
     getFeedbackJobStatus = async (jobId, userId) => {
+      ensureQueueWorkerRunning();
       const job = await getFeedbackJob(jobId, userId);
       if (!job) {
         return null;
       }
       if (job.status === "pending") {
-        return processFeedbackJob(jobId, userId);
+        await enqueueFeedbackJob({
+          jobId,
+          userId,
+          attempt: job.attempts,
+          force: true
+        });
+        return job;
       }
       if (job.status === "processing") {
         const startedAt = job.processingStartedAt?.getTime() ?? 0;
         if (!startedAt || Date.now() - startedAt > JOB_PROCESS_STALE_MS) {
-          return processFeedbackJob(jobId, userId);
+          await enqueueFeedbackJob({
+            jobId,
+            userId,
+            attempt: job.attempts,
+            force: true
+          });
         }
       }
       return job;
     };
     startFeedbackJobProcessing = (jobId, userId) => {
-      setTimeout(() => {
-        void processFeedbackJob(jobId, userId);
-      }, 0);
+      void enqueueFeedbackJob({ jobId, userId });
+    };
+    startFeedbackQueueWorker = () => {
+      ensureQueueWorkerRunning();
     };
     mapJobToApiResponse = (job) => {
       const base = {
@@ -1670,6 +2636,13 @@ var init_feedbackJob_service = __esm({
         return {
           ...base,
           result: job.result,
+          completedAt: job.updatedAt
+        };
+      }
+      if (job.status === "failed") {
+        return {
+          ...base,
+          lastError: job.lastError || "Evaluation failed",
           completedAt: job.updatedAt
         };
       }
@@ -1715,20 +2688,29 @@ var init_feedback_routes = __esm({
             speechTranscript,
             answerDurationSec,
             cameraSnapshot,
-            sessionId
+            sessionId,
+            sessionQuestionIndex
           } = req.body;
+          const trimmedAnswer = typeof answer === "string" ? answer.trim() : "";
+          if (!trimmedAnswer) {
+            return res.status(400).json({
+              success: false,
+              message: "Answer cannot be empty"
+            });
+          }
           const result = await generateFeedback(
             role,
             question,
-            answer,
+            trimmedAnswer,
             parseExpectedPoints(expectedPoints),
             { providerTimeoutMs: 5200 }
           );
           await persistFeedbackToSession({
             userId,
             sessionId,
+            sessionQuestionIndex,
             question,
-            answer,
+            answer: trimmedAnswer,
             speechTranscript,
             answerDurationSec,
             cameraSnapshot,
@@ -1760,18 +2742,27 @@ var init_feedback_routes = __esm({
             speechTranscript,
             answerDurationSec,
             cameraSnapshot,
-            sessionId
+            sessionId,
+            sessionQuestionIndex
           } = req.body;
+          const trimmedAnswer = typeof answer === "string" ? answer.trim() : "";
+          if (!trimmedAnswer) {
+            return res.status(400).json({
+              success: false,
+              message: "Answer cannot be empty"
+            });
+          }
           const { job, provisional } = await createFeedbackJob({
             userId,
             role,
             question,
-            answer,
+            answer: trimmedAnswer,
             expectedPoints: parseExpectedPoints(expectedPoints),
             speechTranscript,
             answerDurationSec,
             cameraSnapshot,
-            sessionId
+            sessionId,
+            sessionQuestionIndex
           });
           startFeedbackJobProcessing(job.id, userId);
           return res.status(202).json({
@@ -1822,23 +2813,228 @@ var init_feedback_routes = __esm({
 // backend/src/services/auth.service.ts
 import axios3 from "axios";
 import bcrypt from "bcryptjs";
+import crypto3 from "crypto";
 import jwt2 from "jsonwebtoken";
-var SALT_ROUNDS, TOKEN_TTL, GOOGLE_TOKENINFO_ENDPOINT, GOOGLE_VERIFY_TIMEOUT_MS, normalizeEmail, isEmailVerified, AuthService;
+var SALT_ROUNDS, ACCESS_TOKEN_TTL, REFRESH_TOKEN_TTL, GOOGLE_TOKENINFO_ENDPOINT, GOOGLE_VERIFY_TIMEOUT_MS, PASSWORD_RESET_TOKEN_BYTES, PASSWORD_RESET_TTL_MS, MAX_PASSWORD_HISTORY, MIN_PASSWORD_LENGTH, COMPROMISED_PASSWORD_BLOCKLIST, normalizeEmail, hashResetToken, isEmailVerified, getAccessSecret, getRefreshSecret, parseDurationToSeconds, secondsUntilExp, sanitizeMetadata, normalizeTokenClaims, isBufferEqual, validateStrongPassword, getPasswordHistory, AuthService;
 var init_auth_service = __esm({
   "backend/src/services/auth.service.ts"() {
     "use strict";
     init_user();
+    init_authRuntimeStore();
+    init_observability();
     SALT_ROUNDS = 12;
-    TOKEN_TTL = "7d";
+    ACCESS_TOKEN_TTL = (process.env.JWT_ACCESS_TTL ?? "15m").trim() || "15m";
+    REFRESH_TOKEN_TTL = (process.env.JWT_REFRESH_TTL ?? "14d").trim() || "14d";
     GOOGLE_TOKENINFO_ENDPOINT = "https://oauth2.googleapis.com/tokeninfo";
     GOOGLE_VERIFY_TIMEOUT_MS = 7e3;
+    PASSWORD_RESET_TOKEN_BYTES = 32;
+    PASSWORD_RESET_TTL_MS = 1e3 * 60 * 15;
+    MAX_PASSWORD_HISTORY = 5;
+    MIN_PASSWORD_LENGTH = 12;
+    COMPROMISED_PASSWORD_BLOCKLIST = /* @__PURE__ */ new Set([
+      "password",
+      "password123",
+      "qwerty123",
+      "12345678",
+      "letmein123",
+      "welcome123",
+      "admin1234",
+      "passw0rd",
+      "iloveyou",
+      "abc12345"
+    ]);
     normalizeEmail = (email) => email.trim().toLowerCase();
+    hashResetToken = (token) => crypto3.createHash("sha256").update(token).digest("hex");
     isEmailVerified = (value) => {
       if (typeof value === "boolean") return value;
       return typeof value === "string" && value.toLowerCase() === "true";
     };
+    getAccessSecret = () => {
+      const secret = (process.env.JWT_SECRET ?? "").trim();
+      if (!secret) {
+        throw new Error("JWT secret is not configured");
+      }
+      return secret;
+    };
+    getRefreshSecret = () => {
+      const candidate = (process.env.JWT_REFRESH_SECRET ?? "").trim();
+      return candidate || getAccessSecret();
+    };
+    parseDurationToSeconds = (value, fallbackSec) => {
+      const normalized = String(value).trim().toLowerCase();
+      const match = normalized.match(/^(\d+)(s|m|h|d)$/);
+      if (!match) {
+        const parsed = Number.parseInt(normalized, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackSec;
+      }
+      const amount = Number.parseInt(match[1], 10);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return fallbackSec;
+      }
+      const unit = match[2];
+      if (unit === "s") return amount;
+      if (unit === "m") return amount * 60;
+      if (unit === "h") return amount * 3600;
+      return amount * 86400;
+    };
+    secondsUntilExp = (exp) => {
+      if (!exp || !Number.isFinite(exp)) {
+        return 60;
+      }
+      return Math.max(60, Math.floor(exp - Date.now() / 1e3));
+    };
+    sanitizeMetadata = (metadata) => ({
+      ipAddress: (metadata?.ipAddress ?? "").trim() || "unknown",
+      userAgent: (metadata?.userAgent ?? "").trim() || "unknown"
+    });
+    normalizeTokenClaims = (decoded, tokenType) => {
+      const id = typeof decoded.id === "string" ? decoded.id : "";
+      if (!id) {
+        throw new Error("Token payload is invalid");
+      }
+      const typeRaw = typeof decoded.type === "string" ? decoded.type : "";
+      if (!typeRaw && tokenType === "access") {
+        return {
+          id,
+          type: "access",
+          sid: "legacy",
+          jti: "",
+          iat: decoded.iat,
+          exp: decoded.exp
+        };
+      }
+      if (typeRaw !== tokenType) {
+        throw new Error("Token type mismatch");
+      }
+      const sid = typeof decoded.sid === "string" ? decoded.sid : "";
+      const jti = typeof decoded.jti === "string" ? decoded.jti : "";
+      if (!sid || !jti) {
+        throw new Error("Token session metadata is missing");
+      }
+      return {
+        id,
+        type: tokenType,
+        sid,
+        jti,
+        iat: decoded.iat,
+        exp: decoded.exp
+      };
+    };
+    isBufferEqual = (left, right) => {
+      if (!left || !right) {
+        return false;
+      }
+      const leftBuffer = Buffer.from(left, "utf8");
+      const rightBuffer = Buffer.from(right, "utf8");
+      if (leftBuffer.length !== rightBuffer.length) {
+        return false;
+      }
+      return crypto3.timingSafeEqual(leftBuffer, rightBuffer);
+    };
+    validateStrongPassword = (password) => {
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        throw new Error(`Password must be at least ${MIN_PASSWORD_LENGTH} characters long`);
+      }
+      if (!/[A-Z]/.test(password)) {
+        throw new Error("Password must include at least one uppercase letter");
+      }
+      if (!/[a-z]/.test(password)) {
+        throw new Error("Password must include at least one lowercase letter");
+      }
+      if (!/[0-9]/.test(password)) {
+        throw new Error("Password must include at least one number");
+      }
+      if (!/[^A-Za-z0-9]/.test(password)) {
+        throw new Error("Password must include at least one special character");
+      }
+      if (/\s/.test(password)) {
+        throw new Error("Password cannot include spaces");
+      }
+      if (COMPROMISED_PASSWORD_BLOCKLIST.has(password.toLowerCase())) {
+        throw new Error("Password is too common. Choose a stronger password");
+      }
+    };
+    getPasswordHistory = (user) => {
+      const history = Array.isArray(user.passwordHistory) ? user.passwordHistory : [];
+      return [user.passwordHash, ...history].filter((item) => typeof item === "string" && item.length > 0).slice(0, MAX_PASSWORD_HISTORY + 1);
+    };
     AuthService = class {
-      static async signup(name, email, password) {
+      static parseToken(token, tokenType) {
+        const secret = tokenType === "refresh" ? getRefreshSecret() : getAccessSecret();
+        const decoded = jwt2.verify(token, secret, {
+          algorithms: ["HS256"]
+        });
+        return normalizeTokenClaims(decoded, tokenType);
+      }
+      static async assertPasswordNotReused(user, nextPassword) {
+        for (const hash of getPasswordHistory(user)) {
+          const matched = await bcrypt.compare(nextPassword, hash);
+          if (matched) {
+            throw new Error("Choose a password you have not used recently");
+          }
+        }
+      }
+      static async issueTokens(userId, metadata, sessionId) {
+        const accessSecret = getAccessSecret();
+        const refreshSecret = getRefreshSecret();
+        const nextSessionId = sessionId || crypto3.randomUUID();
+        const accessJti = crypto3.randomUUID();
+        const refreshJti = crypto3.randomUUID();
+        const accessExpiresInSec = parseDurationToSeconds(ACCESS_TOKEN_TTL ?? "15m", 900);
+        const refreshExpiresInSec = parseDurationToSeconds(
+          REFRESH_TOKEN_TTL ?? "14d",
+          60 * 60 * 24 * 14
+        );
+        const accessToken = jwt2.sign(
+          {
+            id: userId,
+            type: "access",
+            sid: nextSessionId,
+            jti: accessJti
+          },
+          accessSecret,
+          {
+            expiresIn: ACCESS_TOKEN_TTL,
+            algorithm: "HS256"
+          }
+        );
+        const refreshToken = jwt2.sign(
+          {
+            id: userId,
+            type: "refresh",
+            sid: nextSessionId,
+            jti: refreshJti
+          },
+          refreshSecret,
+          {
+            expiresIn: REFRESH_TOKEN_TTL,
+            algorithm: "HS256"
+          }
+        );
+        const safeMetadata = sanitizeMetadata(metadata);
+        await storeRefreshSession({
+          sessionId: nextSessionId,
+          userId,
+          refreshTokenHash: hashAuthToken(refreshToken),
+          fingerprint: buildLoginFingerprint(safeMetadata),
+          ttlSec: refreshExpiresInSec
+        });
+        return {
+          accessToken,
+          refreshToken,
+          accessExpiresInSec,
+          refreshExpiresInSec,
+          sessionId: nextSessionId
+        };
+      }
+      static async markSuccessfulLogin(user, metadata) {
+        const safeMetadata = sanitizeMetadata(metadata);
+        user.lastLoginAt = /* @__PURE__ */ new Date();
+        user.lastLoginFingerprint = buildLoginFingerprint(safeMetadata);
+        await user.save();
+      }
+      static async signup(name, email, password, metadata) {
+        validateStrongPassword(password);
         const normalizedEmail = normalizeEmail(email);
         const exists = await user_default.findOne({ email: normalizedEmail });
         if (exists) {
@@ -1852,11 +3048,13 @@ var init_auth_service = __esm({
           name: name.trim(),
           email: normalizedEmail,
           passwordHash,
+          passwordHistory: [],
           authProvider: "local"
         });
-        return this.generateToken(user._id.toString());
+        await this.markSuccessfulLogin(user, metadata);
+        return this.issueTokens(user._id.toString(), metadata);
       }
-      static async login(email, password) {
+      static async login(email, password, metadata) {
         const normalizedEmail = normalizeEmail(email);
         const user = await user_default.findOne({ email: normalizedEmail });
         if (!user) throw new Error("Invalid email or password");
@@ -1864,10 +3062,23 @@ var init_auth_service = __esm({
           throw new Error("This account uses Google sign-in. Continue with Google.");
         }
         const match = await bcrypt.compare(password, user.passwordHash);
-        if (!match) throw new Error("Invalid email or password");
-        return this.generateToken(user._id.toString());
+        if (!match) {
+          const suspiciousCount = await incrementSuspiciousLogin({
+            email: normalizedEmail,
+            ipAddress: sanitizeMetadata(metadata).ipAddress
+          });
+          if (suspiciousCount >= 5) {
+            logger.warn("auth.suspicious_login_threshold_reached", {
+              email: normalizedEmail,
+              suspiciousCount
+            });
+          }
+          throw new Error("Invalid email or password");
+        }
+        await this.markSuccessfulLogin(user, metadata);
+        return this.issueTokens(user._id.toString(), metadata);
       }
-      static async loginWithGoogle(credential) {
+      static async loginWithGoogle(credential, metadata) {
         const idToken = credential.trim();
         if (!idToken) {
           throw new Error("Google credential is required");
@@ -1894,9 +3105,100 @@ var init_auth_service = __esm({
           if (!user.passwordHash) {
             user.authProvider = "google";
           }
-          await user.save();
         }
-        return this.generateToken(user._id.toString());
+        await this.markSuccessfulLogin(user, metadata);
+        return this.issueTokens(user._id.toString(), metadata);
+      }
+      static async requestPasswordReset(email) {
+        const normalizedEmail = normalizeEmail(email);
+        const user = await user_default.findOne({ email: normalizedEmail });
+        if (!user) {
+          return {};
+        }
+        const resetToken = crypto3.randomBytes(PASSWORD_RESET_TOKEN_BYTES).toString("hex");
+        user.passwordResetTokenHash = hashResetToken(resetToken);
+        user.passwordResetExpiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+        await user.save();
+        return { resetToken };
+      }
+      static async resetPassword(resetToken, nextPassword, metadata) {
+        validateStrongPassword(nextPassword);
+        const tokenHash = hashResetToken(resetToken.trim());
+        const now = /* @__PURE__ */ new Date();
+        const user = await user_default.findOne({
+          passwordResetTokenHash: tokenHash,
+          passwordResetExpiresAt: { $gt: now }
+        });
+        if (!user) {
+          throw new Error("Password reset link is invalid or expired");
+        }
+        await this.assertPasswordNotReused(user, nextPassword);
+        const previousHistory = getPasswordHistory(user).slice(0, MAX_PASSWORD_HISTORY);
+        user.passwordHash = await bcrypt.hash(nextPassword, SALT_ROUNDS);
+        user.passwordHistory = previousHistory;
+        user.authProvider = "local";
+        user.passwordResetTokenHash = void 0;
+        user.passwordResetExpiresAt = void 0;
+        await this.markSuccessfulLogin(user, metadata);
+        return this.issueTokens(user._id.toString(), metadata);
+      }
+      static async refreshTokens(refreshToken, metadata) {
+        const claims = this.parseToken(refreshToken, "refresh");
+        if (await isTokenRevoked(claims.jti)) {
+          throw new Error("Session has been revoked");
+        }
+        const session = await getRefreshSession(claims.sid);
+        if (!session || session.userId !== claims.id) {
+          throw new Error("Session is invalid or expired");
+        }
+        const safeMetadata = sanitizeMetadata(metadata);
+        const expectedFingerprint = buildLoginFingerprint(safeMetadata);
+        if (!isBufferEqual(session.fingerprint, expectedFingerprint)) {
+          await incrementSuspiciousLogin({
+            email: claims.id,
+            ipAddress: safeMetadata.ipAddress
+          });
+          throw new Error("Session fingerprint mismatch");
+        }
+        const providedTokenHash = hashAuthToken(refreshToken);
+        if (!isBufferEqual(session.refreshTokenHash, providedTokenHash)) {
+          throw new Error("Refresh token mismatch");
+        }
+        await revokeTokenByJti({
+          jti: claims.jti,
+          ttlSec: secondsUntilExp(claims.exp),
+          reason: "refresh_rotated"
+        });
+        return this.issueTokens(claims.id, metadata, claims.sid);
+      }
+      static async logout(tokens) {
+        const accessToken = tokens.accessToken?.trim() ?? "";
+        const refreshToken = tokens.refreshToken?.trim() ?? "";
+        if (accessToken) {
+          try {
+            const claims = this.parseToken(accessToken, "access");
+            if (claims.jti) {
+              await revokeTokenByJti({
+                jti: claims.jti,
+                ttlSec: secondsUntilExp(claims.exp),
+                reason: "logout"
+              });
+            }
+          } catch {
+          }
+        }
+        if (refreshToken) {
+          try {
+            const claims = this.parseToken(refreshToken, "refresh");
+            await revokeTokenByJti({
+              jti: claims.jti,
+              ttlSec: secondsUntilExp(claims.exp),
+              reason: "logout"
+            });
+            await deleteRefreshSession(claims.sid);
+          } catch {
+          }
+        }
       }
       static async verifyGoogleToken(idToken) {
         try {
@@ -1907,7 +3209,10 @@ var init_auth_service = __esm({
           const payload = response.data;
           const allowedIssuer = payload.iss === "accounts.google.com" || payload.iss === "https://accounts.google.com";
           const expectedAudience = (process.env.GOOGLE_CLIENT_ID ?? "").trim();
-          const audienceMatches = !expectedAudience || payload.aud === expectedAudience;
+          if (!expectedAudience) {
+            throw new Error("Google sign-in is not configured on the server");
+          }
+          const audienceMatches = payload.aud === expectedAudience;
           if (!allowedIssuer || !audienceMatches || !payload.sub || !payload.email || !isEmailVerified(payload.email_verified)) {
             throw new Error("Google token validation failed");
           }
@@ -1916,27 +3221,22 @@ var init_auth_service = __esm({
             sub: payload.sub,
             email: payload.email
           };
-        } catch {
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "";
+          if (message.includes("not configured")) {
+            throw new Error("Google sign-in is not configured on the server");
+          }
           throw new Error("Google authentication failed");
         }
       }
-      static generateToken(id) {
-        const secret = process.env.JWT_SECRET;
-        if (!secret) {
-          throw new Error("JWT secret is not configured");
-        }
-        return jwt2.sign({ id }, secret, {
-          expiresIn: TOKEN_TTL,
-          algorithm: "HS256"
-        });
-      }
       static async getUserFromToken(token) {
-        const secret = process.env.JWT_SECRET;
-        if (!secret) {
-          throw new Error("JWT secret is not configured");
+        const claims = this.parseToken(token, "access");
+        if (claims.jti && await isTokenRevoked(claims.jti)) {
+          throw new Error("Token has been revoked");
         }
-        const decoded = jwt2.verify(token, secret);
-        const user = await user_default.findById(decoded.id).select("-passwordHash");
+        const user = await user_default.findById(claims.id).select(
+          "-passwordHash -passwordHistory -passwordResetTokenHash -passwordResetExpiresAt"
+        );
         if (!user) throw new Error("User not found");
         return user;
       }
@@ -1945,30 +3245,87 @@ var init_auth_service = __esm({
 });
 
 // backend/src/controllers/auth.controller.ts
-var isProduction, COOKIE_OPTIONS, CLEAR_COOKIE_OPTIONS, AuthController;
+var isProduction, ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, parseDurationMs, ACCESS_TOKEN_MAX_AGE_MS, REFRESH_TOKEN_MAX_AGE_MS, BASE_COOKIE_OPTIONS, ACCESS_COOKIE_OPTIONS, REFRESH_COOKIE_OPTIONS, CLEAR_ACCESS_COOKIE_OPTIONS, CLEAR_REFRESH_COOKIE_OPTIONS, getRequestMetadata, setAuthCookies, clearAuthCookies, extractAccessToken, extractRefreshToken, AuthController;
 var init_auth_controller = __esm({
   "backend/src/controllers/auth.controller.ts"() {
     "use strict";
     init_auth_service();
     isProduction = process.env.NODE_ENV === "production";
-    COOKIE_OPTIONS = {
+    ACCESS_TOKEN_COOKIE = "token";
+    REFRESH_TOKEN_COOKIE = "refresh_token";
+    parseDurationMs = (raw, fallbackMs) => {
+      const normalized = raw.trim().toLowerCase();
+      const match = normalized.match(/^(\d+)(s|m|h|d)$/);
+      if (!match) {
+        const parsed = Number.parseInt(normalized, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed * 1e3 : fallbackMs;
+      }
+      const amount = Number.parseInt(match[1], 10);
+      const unit = match[2];
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return fallbackMs;
+      }
+      if (unit === "s") return amount * 1e3;
+      if (unit === "m") return amount * 60 * 1e3;
+      if (unit === "h") return amount * 60 * 60 * 1e3;
+      return amount * 24 * 60 * 60 * 1e3;
+    };
+    ACCESS_TOKEN_MAX_AGE_MS = parseDurationMs(process.env.JWT_ACCESS_TTL ?? "15m", 15 * 60 * 1e3);
+    REFRESH_TOKEN_MAX_AGE_MS = parseDurationMs(
+      process.env.JWT_REFRESH_TTL ?? "14d",
+      14 * 24 * 60 * 60 * 1e3
+    );
+    BASE_COOKIE_OPTIONS = {
       httpOnly: true,
       secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
-      path: "/",
-      maxAge: 1e3 * 60 * 60 * 24 * 7
+      sameSite: isProduction ? "none" : "lax"
     };
-    CLEAR_COOKIE_OPTIONS = {
-      ...COOKIE_OPTIONS,
+    ACCESS_COOKIE_OPTIONS = {
+      ...BASE_COOKIE_OPTIONS,
+      path: "/",
+      maxAge: ACCESS_TOKEN_MAX_AGE_MS
+    };
+    REFRESH_COOKIE_OPTIONS = {
+      ...BASE_COOKIE_OPTIONS,
+      path: "/api/auth",
+      maxAge: REFRESH_TOKEN_MAX_AGE_MS
+    };
+    CLEAR_ACCESS_COOKIE_OPTIONS = {
+      ...ACCESS_COOKIE_OPTIONS,
       maxAge: 0
     };
+    CLEAR_REFRESH_COOKIE_OPTIONS = {
+      ...REFRESH_COOKIE_OPTIONS,
+      maxAge: 0
+    };
+    getRequestMetadata = (req) => {
+      const forwardedFor = req.header("x-forwarded-for");
+      const forwardedIp = forwardedFor?.split(",")[0]?.trim() ?? "";
+      return {
+        ipAddress: forwardedIp || req.ip || "",
+        userAgent: req.header("user-agent") ?? ""
+      };
+    };
+    setAuthCookies = (res, tokens) => {
+      res.cookie(ACCESS_TOKEN_COOKIE, tokens.accessToken, ACCESS_COOKIE_OPTIONS);
+      res.cookie(REFRESH_TOKEN_COOKIE, tokens.refreshToken, REFRESH_COOKIE_OPTIONS);
+    };
+    clearAuthCookies = (res) => {
+      res.clearCookie(ACCESS_TOKEN_COOKIE, CLEAR_ACCESS_COOKIE_OPTIONS);
+      res.clearCookie(REFRESH_TOKEN_COOKIE, CLEAR_REFRESH_COOKIE_OPTIONS);
+    };
+    extractAccessToken = (req) => {
+      const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim() ?? "";
+      return (req.cookies?.[ACCESS_TOKEN_COOKIE] ?? bearer).trim();
+    };
+    extractRefreshToken = (req) => (req.cookies?.[REFRESH_TOKEN_COOKIE] ?? "").trim();
     AuthController = class {
       static async signup(req, res) {
         try {
           const { name, email, password } = req.body;
-          const token = await AuthService.signup(name, email, password);
-          const user = await AuthService.getUserFromToken(token);
-          res.cookie("token", token, COOKIE_OPTIONS);
+          const tokens = await AuthService.signup(name, email, password, getRequestMetadata(req));
+          const user = await AuthService.getUserFromToken(tokens.accessToken);
+          setAuthCookies(res, tokens);
           return res.json({
             success: true,
             message: "Signup successful",
@@ -1985,9 +3342,9 @@ var init_auth_controller = __esm({
       static async login(req, res) {
         try {
           const { email, password } = req.body;
-          const token = await AuthService.login(email, password);
-          const user = await AuthService.getUserFromToken(token);
-          res.cookie("token", token, COOKIE_OPTIONS);
+          const tokens = await AuthService.login(email, password, getRequestMetadata(req));
+          const user = await AuthService.getUserFromToken(tokens.accessToken);
+          setAuthCookies(res, tokens);
           return res.json({
             success: true,
             message: "Login successful",
@@ -2004,9 +3361,9 @@ var init_auth_controller = __esm({
       static async googleLogin(req, res) {
         try {
           const { credential } = req.body;
-          const token = await AuthService.loginWithGoogle(credential);
-          const user = await AuthService.getUserFromToken(token);
-          res.cookie("token", token, COOKIE_OPTIONS);
+          const tokens = await AuthService.loginWithGoogle(credential, getRequestMetadata(req));
+          const user = await AuthService.getUserFromToken(tokens.accessToken);
+          setAuthCookies(res, tokens);
           return res.json({
             success: true,
             message: "Google login successful",
@@ -2020,29 +3377,123 @@ var init_auth_controller = __esm({
           });
         }
       }
+      static async refresh(req, res) {
+        try {
+          const refreshToken = extractRefreshToken(req);
+          if (!refreshToken) {
+            return res.status(401).json({
+              success: false,
+              message: "Refresh token is missing"
+            });
+          }
+          const tokens = await AuthService.refreshTokens(refreshToken, getRequestMetadata(req));
+          const user = await AuthService.getUserFromToken(tokens.accessToken);
+          setAuthCookies(res, tokens);
+          return res.json({
+            success: true,
+            message: "Session refreshed",
+            user
+          });
+        } catch (err) {
+          clearAuthCookies(res);
+          const message = err instanceof Error ? err.message : "Session refresh failed";
+          return res.status(401).json({
+            success: false,
+            message
+          });
+        }
+      }
+      static async forgotPassword(req, res) {
+        try {
+          const { email } = req.body;
+          const { resetToken } = await AuthService.requestPasswordReset(email);
+          const genericMessage = "If an account exists for this email, you will receive password reset instructions shortly.";
+          const frontendUrl = (process.env.FRONTEND_URL ?? "").trim();
+          const devFallbackUrl = "http://localhost:5173";
+          const baseUrl = frontendUrl.startsWith("http://") || frontendUrl.startsWith("https://") ? frontendUrl : devFallbackUrl;
+          const resetUrl = process.env.NODE_ENV === "production" || !resetToken ? void 0 : `${baseUrl.replace(/\/+$/, "")}/reset-password?token=${encodeURIComponent(resetToken)}`;
+          if (resetUrl) {
+            console.info("Password reset link (development only):", resetUrl);
+          }
+          return res.json({
+            success: true,
+            message: genericMessage,
+            resetUrl
+          });
+        } catch {
+          return res.status(500).json({
+            success: false,
+            message: "Failed to process password reset request"
+          });
+        }
+      }
+      static async resetPassword(req, res) {
+        try {
+          const { token, password } = req.body;
+          const tokens = await AuthService.resetPassword(token, password, getRequestMetadata(req));
+          const user = await AuthService.getUserFromToken(tokens.accessToken);
+          setAuthCookies(res, tokens);
+          return res.json({
+            success: true,
+            message: "Password reset successful",
+            user
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : "Password reset failed";
+          return res.status(400).json({
+            success: false,
+            message
+          });
+        }
+      }
       static async getMe(req, res) {
         try {
-          const token = req.cookies?.token || req.headers.authorization?.replace("Bearer ", "");
-          if (!token) {
+          const accessToken = extractAccessToken(req);
+          const refreshToken = extractRefreshToken(req);
+          if (!accessToken && !refreshToken) {
             return res.status(401).json({
               success: false,
               message: "Not authenticated"
             });
           }
-          const user = await AuthService.getUserFromToken(token);
+          if (accessToken) {
+            try {
+              const user2 = await AuthService.getUserFromToken(accessToken);
+              return res.json({
+                success: true,
+                user: user2
+              });
+            } catch {
+            }
+          }
+          if (!refreshToken) {
+            clearAuthCookies(res);
+            return res.status(401).json({
+              success: false,
+              message: "Invalid or expired token"
+            });
+          }
+          const tokens = await AuthService.refreshTokens(refreshToken, getRequestMetadata(req));
+          const user = await AuthService.getUserFromToken(tokens.accessToken);
+          setAuthCookies(res, tokens);
           return res.json({
             success: true,
             user
           });
         } catch {
+          clearAuthCookies(res);
           return res.status(401).json({
             success: false,
             message: "Invalid or expired token"
           });
         }
       }
-      static async logout(_req, res) {
-        res.clearCookie("token", CLEAR_COOKIE_OPTIONS);
+      static async logout(req, res) {
+        await AuthService.logout({
+          accessToken: extractAccessToken(req),
+          refreshToken: extractRefreshToken(req)
+        });
+        clearAuthCookies(res);
         return res.json({
           success: true,
           message: "Logged out"
@@ -2053,7 +3504,7 @@ var init_auth_controller = __esm({
 });
 
 // backend/src/middleware/csrf.middleware.ts
-import crypto from "crypto";
+import crypto4 from "crypto";
 var isProduction2, CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_COOKIE_OPTIONS, SAFE_METHODS, generateToken, ensureTokenCookie, csrfCookieMiddleware, requireCsrfProtection, issueCsrfToken;
 var init_csrf_middleware = __esm({
   "backend/src/middleware/csrf.middleware.ts"() {
@@ -2069,7 +3520,7 @@ var init_csrf_middleware = __esm({
       maxAge: 1e3 * 60 * 60 * 24
     };
     SAFE_METHODS = /* @__PURE__ */ new Set(["GET", "HEAD", "OPTIONS"]);
-    generateToken = () => crypto.randomBytes(32).toString("hex");
+    generateToken = () => crypto4.randomBytes(32).toString("hex");
     ensureTokenCookie = (req, res) => {
       const existing = req.cookies?.[CSRF_COOKIE_NAME];
       if (typeof existing === "string" && existing.length >= 32) {
@@ -2141,6 +3592,21 @@ var init_auth_routes = __esm({
       googleAuthValidation,
       handleValidationErrors,
       AuthController.googleLogin
+    );
+    router3.post("/refresh", authRateLimit, AuthController.refresh);
+    router3.post(
+      "/forgot-password",
+      authRateLimit,
+      forgotPasswordValidation,
+      handleValidationErrors,
+      AuthController.forgotPassword
+    );
+    router3.post(
+      "/reset-password",
+      authRateLimit,
+      resetPasswordValidation,
+      handleValidationErrors,
+      AuthController.resetPassword
     );
     router3.get("/me", AuthController.getMe);
     router3.post("/logout", AuthController.logout);
@@ -2422,20 +3888,42 @@ var init_recordingStore = __esm({
 
 // backend/src/routes/recording.routes.ts
 import { Router as Router5 } from "express";
+import crypto5 from "crypto";
 import multer2 from "multer";
 import mongoose8 from "mongoose";
-var MAX_RECORDING_SIZE_BYTES, upload2, router6, recording_routes_default;
+var MAX_RECORDING_SIZE_BYTES, SIGNED_RECORDING_TOKEN_TTL_SEC, redisKeyPrefix3, SIGNED_RECORDING_NAMESPACE, runtimeStore3, parseOptionalQuestionIndex, upload2, router6, signedRecordingKey, issueSignedRecordingToken, readSignedRecordingToken, recording_routes_default;
 var init_recording_routes = __esm({
   "backend/src/routes/recording.routes.ts"() {
     "use strict";
     init_auth_middleware();
     init_rateLimit_middleware();
     init_interviewSession();
+    init_runtimeStore();
+    init_env();
     init_recordingStore();
     MAX_RECORDING_SIZE_BYTES = Number.parseInt(
       process.env.MAX_RECORDING_FILE_SIZE_BYTES ?? `${25 * 1024 * 1024}`,
       10
     );
+    SIGNED_RECORDING_TOKEN_TTL_SEC = Math.max(
+      60,
+      Number.parseInt(process.env.RECORDING_SIGNED_URL_TTL_SEC ?? "600", 10)
+    );
+    ({ redisKeyPrefix: redisKeyPrefix3 } = getEnvConfig());
+    SIGNED_RECORDING_NAMESPACE = `${redisKeyPrefix3}:recording:signed`;
+    runtimeStore3 = getRuntimeStore();
+    parseOptionalQuestionIndex = (value) => {
+      if (typeof value === "number" && Number.isInteger(value)) {
+        return value;
+      }
+      if (typeof value === "string" && value.trim()) {
+        const parsed = Number.parseInt(value, 10);
+        if (Number.isInteger(parsed)) {
+          return parsed;
+        }
+      }
+      return void 0;
+    };
     upload2 = multer2({
       storage: multer2.memoryStorage(),
       limits: {
@@ -2453,6 +3941,115 @@ var init_recording_routes = __esm({
       }
     });
     router6 = Router5();
+    signedRecordingKey = (token) => `${SIGNED_RECORDING_NAMESPACE}:${token}`;
+    issueSignedRecordingToken = async (params) => {
+      const token = crypto5.randomBytes(24).toString("hex");
+      await runtimeStore3.setEx(
+        signedRecordingKey(token),
+        JSON.stringify({
+          fileId: params.fileId,
+          userId: params.userId,
+          issuedAt: Date.now()
+        }),
+        SIGNED_RECORDING_TOKEN_TTL_SEC
+      );
+      return token;
+    };
+    readSignedRecordingToken = async (token) => {
+      const raw = await runtimeStore3.get(signedRecordingKey(token));
+      if (!raw) {
+        return null;
+      }
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed.fileId !== "string" || typeof parsed.userId !== "string") {
+          return null;
+        }
+        return {
+          fileId: parsed.fileId,
+          userId: parsed.userId
+        };
+      } catch {
+        return null;
+      }
+    };
+    router6.get("/signed/:token", async (req, res) => {
+      try {
+        const token = (req.params.token ?? "").trim();
+        if (!/^[a-f0-9]{24,80}$/i.test(token)) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid signed recording token"
+          });
+        }
+        const payload = await readSignedRecordingToken(token);
+        if (!payload) {
+          return res.status(404).json({
+            success: false,
+            message: "Signed recording URL is invalid or expired"
+          });
+        }
+        const fileDoc = await getRecordingFileById(payload.fileId);
+        const ownerId = fileDoc?.metadata?.userId;
+        if (!fileDoc || !ownerId || ownerId !== payload.userId) {
+          return res.status(404).json({
+            success: false,
+            message: "Recording not found"
+          });
+        }
+        const streamed = await streamRecordingFile({
+          fileId: payload.fileId,
+          rangeHeader: req.headers.range,
+          res
+        });
+        if (!streamed) {
+          return res.status(404).json({
+            success: false,
+            message: "Recording not found"
+          });
+        }
+        return void 0;
+      } catch {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to stream signed recording"
+        });
+      }
+    });
+    router6.post("/signed-url", authMiddleware, async (req, res) => {
+      try {
+        const user = req.user;
+        const { fileId } = req.body;
+        if (!fileId || !mongoose8.isValidObjectId(fileId)) {
+          return res.status(400).json({
+            success: false,
+            message: "Valid fileId is required"
+          });
+        }
+        const fileDoc = await getRecordingFileById(fileId);
+        const ownerId = fileDoc?.metadata?.userId;
+        if (!fileDoc || !ownerId || ownerId !== user._id) {
+          return res.status(404).json({
+            success: false,
+            message: "Recording not found"
+          });
+        }
+        const token = await issueSignedRecordingToken({
+          fileId,
+          userId: user._id
+        });
+        return res.json({
+          success: true,
+          signedUrl: `/api/interview/recording/signed/${token}`,
+          expiresInSec: SIGNED_RECORDING_TOKEN_TTL_SEC
+        });
+      } catch {
+        return res.status(500).json({
+          success: false,
+          message: "Failed to issue signed recording URL"
+        });
+      }
+    });
     router6.get("/:fileId", authMiddleware, async (req, res) => {
       try {
         const user = req.user;
@@ -2518,11 +4115,17 @@ var init_recording_routes = __esm({
         try {
           const user = req.user;
           const typedReq = req;
-          const { sessionId } = req.body;
+          const { sessionId, questionIndex } = req.body;
           if (!typedReq.file) {
             return res.status(400).json({
               success: false,
               message: "No recording uploaded"
+            });
+          }
+          if (!typedReq.file.size || typedReq.file.size < 1024) {
+            return res.status(400).json({
+              success: false,
+              message: "Recording is empty or too short"
             });
           }
           if (!sessionId || !mongoose8.isValidObjectId(sessionId)) {
@@ -2541,7 +4144,14 @@ var init_recording_routes = __esm({
               message: "Session not found for recording upload"
             });
           }
-          const targetIndex = session.questions.length - 1;
+          const parsedQuestionIndex = parseOptionalQuestionIndex(questionIndex);
+          if (typeof parsedQuestionIndex === "number" && (parsedQuestionIndex < 0 || parsedQuestionIndex >= session.questions.length)) {
+            return res.status(400).json({
+              success: false,
+              message: "questionIndex is out of range for this session"
+            });
+          }
+          const targetIndex = typeof parsedQuestionIndex === "number" ? parsedQuestionIndex : session.questions.length - 1;
           const existingRecordingId = session.questions[targetIndex].recordingFileId;
           const saved = await saveRecordingFile({
             buffer: typedReq.file.buffer,
@@ -2567,6 +4177,7 @@ var init_recording_routes = __esm({
               fileId: saved.fileId,
               mimeType: saved.mimeType,
               sizeBytes: saved.sizeBytes,
+              questionIndex: targetIndex,
               streamUrl: `/api/interview/recording/${saved.fileId}`
             }
           });
@@ -2582,8 +4193,74 @@ var init_recording_routes = __esm({
   }
 });
 
-// backend/src/lib/db.ts
+// backend/src/routes/ops.routes.ts
+import { Router as Router6 } from "express";
 import mongoose9 from "mongoose";
+var router7, env, requireOpsKey, ops_routes_default;
+var init_ops_routes = __esm({
+  "backend/src/routes/ops.routes.ts"() {
+    "use strict";
+    init_env();
+    router7 = Router6();
+    env = getEnvConfig();
+    requireOpsKey = (req, res, next) => {
+      if (!env.metricsApiKey) {
+        next();
+        return;
+      }
+      const candidate = (req.header("x-metrics-key") ?? "").trim();
+      if (!candidate || candidate !== env.metricsApiKey) {
+        res.status(403).json({
+          success: false,
+          message: "Forbidden"
+        });
+        return;
+      }
+      next();
+    };
+    router7.get("/mongo/indexes", requireOpsKey, async (_req, res) => {
+      try {
+        const db = mongoose9.connection.db;
+        if (!db) {
+          return res.status(503).json({
+            success: false,
+            message: "Mongo connection is not ready"
+          });
+        }
+        const collectionNames = ["users", "interviewsessions", "feedbackjobs"];
+        const collections = await Promise.all(
+          collectionNames.map(async (name) => {
+            const collection = db.collection(name);
+            const [indexes, estimatedCount] = await Promise.all([
+              collection.indexes(),
+              collection.estimatedDocumentCount()
+            ]);
+            return {
+              collection: name,
+              estimatedDocumentCount: estimatedCount,
+              indexes
+            };
+          })
+        );
+        return res.json({
+          success: true,
+          generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          collections
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to read index stats";
+        return res.status(500).json({
+          success: false,
+          message
+        });
+      }
+    });
+    ops_routes_default = router7;
+  }
+});
+
+// backend/src/lib/db.ts
+import mongoose10 from "mongoose";
 async function dbConnect() {
   if (cached?.conn) {
     return cached.conn;
@@ -2598,7 +4275,7 @@ async function dbConnect() {
       serverSelectionTimeoutMS: 5e3,
       socketTimeoutMS: 1e4
     };
-    cached.promise = mongoose9.connect(mongoUri, opts).then((mongooseInstance) => {
+    cached.promise = mongoose10.connect(mongoUri, opts).then((mongooseInstance) => {
       return mongooseInstance;
     });
   }
@@ -2626,6 +4303,82 @@ var init_db = __esm({
   }
 });
 
+// backend/src/middleware/observability.middleware.ts
+var env2, toLatencyMs, observabilityMiddleware, metricsHandler;
+var init_observability_middleware = __esm({
+  "backend/src/middleware/observability.middleware.ts"() {
+    "use strict";
+    init_env();
+    init_observability();
+    init_aiResilience();
+    env2 = getEnvConfig();
+    toLatencyMs = (startedAt) => Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6 * 100) / 100;
+    observabilityMiddleware = (req, res, next) => {
+      const startedAt = process.hrtime.bigint();
+      const context = createRequestContext({
+        requestIdHeader: req.header("x-request-id") ?? "",
+        traceparentHeader: req.header("traceparent") ?? "",
+        method: req.method,
+        path: req.originalUrl || req.url || "/"
+      });
+      res.setHeader("X-Request-Id", context.requestId);
+      res.setHeader("Traceparent", getRequestTraceparent(context));
+      withRequestContext(context, () => {
+        logger.info("http.request.start", {
+          method: req.method,
+          path: req.originalUrl,
+          ip: req.ip
+        });
+        res.on("finish", () => {
+          withRequestContext(context, () => {
+            const latencyMs = toLatencyMs(startedAt);
+            const typedReq = req;
+            recordRouteLatency({
+              method: req.method,
+              path: req.originalUrl || req.url || "/",
+              statusCode: res.statusCode,
+              latencyMs
+            });
+            logger.info("http.request.finish", {
+              method: req.method,
+              path: req.originalUrl,
+              statusCode: res.statusCode,
+              latencyMs,
+              userId: typedReq.user?._id
+            });
+          });
+        });
+        next();
+      });
+    };
+    metricsHandler = (req, res) => {
+      const apiKey = env2.metricsApiKey;
+      if (apiKey) {
+        const headerValue = req.header("x-metrics-key") ?? "";
+        if (headerValue !== apiKey) {
+          res.status(403).json({
+            success: false,
+            message: "Forbidden"
+          });
+          return;
+        }
+      }
+      const format = (req.query.format ?? "").toString().toLowerCase();
+      if (format === "prometheus" || format === "prom") {
+        res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+        res.status(200).send(buildPrometheusMetrics());
+        return;
+      }
+      res.status(200).json({
+        success: true,
+        generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        routes: getRouteLatencySnapshot(),
+        aiResilience: getAiResilienceSnapshot()
+      });
+    };
+  }
+});
+
 // backend/src/app.ts
 var app_exports = {};
 __export(app_exports, {
@@ -2636,9 +4389,9 @@ import path from "path";
 import express2 from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import mongoose10 from "mongoose";
+import mongoose11 from "mongoose";
 import { fileURLToPath } from "url";
-var env, app, isProduction3, defaultDevOrigins, allowedOrigins, __filename, __dirname, frontendCandidates, frontendPath, normalizeHost, getOriginHost, isOriginAllowed, baseCorsOptions, corsDelegate, buildHealthPayload, healthHandler, readinessHandler, requireDb, app_default;
+var env3, app, isProduction3, defaultDevOrigins, allowedOrigins, __filename, __dirname, frontendCandidates, frontendPath, normalizeHost, getOriginHost, isOriginAllowed, baseCorsOptions, corsDelegate, buildHealthPayload, healthHandler, readinessHandler, requireDb, app_default;
 var init_app = __esm({
   "backend/src/app.ts"() {
     "use strict";
@@ -2648,14 +4401,24 @@ var init_app = __esm({
     init_history_routes();
     init_resume_routes();
     init_recording_routes();
+    init_ops_routes();
     init_db();
+    init_feedbackJob_service();
+    init_observability_middleware();
     init_csrf_middleware();
     init_env();
-    env = getEnvConfig();
+    init_observability();
+    env3 = getEnvConfig();
     app = express2();
-    isProduction3 = env.isProduction;
+    isProduction3 = env3.isProduction;
     defaultDevOrigins = isProduction3 ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"];
-    allowedOrigins = /* @__PURE__ */ new Set([...defaultDevOrigins, ...env.allowedCorsOrigins]);
+    allowedOrigins = /* @__PURE__ */ new Set([...defaultDevOrigins, ...env3.allowedCorsOrigins]);
+    logger.info("redis.runtime.configuration", {
+      redisConfigured: env3.redisConfigured,
+      redisKeyPrefix: env3.redisKeyPrefix,
+      redisMemoryPolicy: env3.redisMemoryPolicy,
+      redisPersistenceMode: env3.redisPersistenceMode
+    });
     __filename = fileURLToPath(import.meta.url);
     __dirname = path.dirname(__filename);
     frontendCandidates = [
@@ -2703,6 +4466,8 @@ var init_app = __esm({
     };
     app.set("trust proxy", 1);
     app.disable("x-powered-by");
+    startFeedbackQueueWorker();
+    app.use(observabilityMiddleware);
     app.use((req, res, next) => {
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("X-Frame-Options", "DENY");
@@ -2721,10 +4486,11 @@ var init_app = __esm({
     app.use(express2.json({ limit: "1mb" }));
     app.use(express2.urlencoded({ extended: true, limit: "1mb" }));
     app.use("/api", csrfCookieMiddleware);
+    app.get("/api/metrics", metricsHandler);
     buildHealthPayload = () => ({
       uptime: Math.round(process.uptime()),
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      dbState: mongoose10.connection.readyState
+      dbState: mongoose11.connection.readyState
     });
     healthHandler = (_req, res) => {
       res.status(200).json({
@@ -2769,12 +4535,14 @@ var init_app = __esm({
     app.use("/api/interview", requireDb);
     app.use("/api/history", requireDb);
     app.use("/api/resume", requireDb);
+    app.use("/api/ops", requireDb);
     app.use("/api/auth", auth_routes_default);
     app.use("/api/interview", interview_routes_default);
     app.use("/api/interview/feedback", feedback_routes_default);
     app.use("/api/interview/recording", recording_routes_default);
     app.use("/api/history", history_routes_default);
     app.use("/api/resume", resume_routes_default);
+    app.use("/api/ops", ops_routes_default);
     app.use("/api", (_req, res) => {
       res.status(404).json({
         success: false,
@@ -2798,9 +4566,12 @@ var init_app = __esm({
         }
         const statusCode = typeof err === "object" && err !== null && "status" in err && typeof err.status === "number" ? err.status : 500;
         const message = err instanceof Error && !isProduction3 ? err.message : "Internal server error";
+        const requestIdHeader = res.getHeader("X-Request-Id");
+        const requestId = typeof requestIdHeader === "string" ? requestIdHeader : Array.isArray(requestIdHeader) ? requestIdHeader[0] : "";
         res.status(statusCode).json({
           success: false,
-          message
+          message,
+          requestId: requestId || void 0
         });
       }
     );

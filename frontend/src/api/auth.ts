@@ -82,6 +82,50 @@ export async function getMe() {
   return parseApiResponse(res);
 }
 
+export async function refreshSession() {
+  await ensureCsrfToken();
+
+  const res = await fetch(`${apiBaseUrl}/auth/refresh`, {
+    method: "POST",
+    credentials: "include",
+    headers: getCsrfHeaders(),
+  });
+
+  return parseApiResponse(res);
+}
+
+export async function forgotPassword(email: string) {
+  await ensureCsrfToken();
+
+  const res = await fetch(`${apiBaseUrl}/auth/forgot-password`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...getCsrfHeaders(),
+    },
+    body: JSON.stringify({ email }),
+  });
+
+  return parseApiResponse(res);
+}
+
+export async function resetPassword(token: string, password: string) {
+  await ensureCsrfToken();
+
+  const res = await fetch(`${apiBaseUrl}/auth/reset-password`, {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+      ...getCsrfHeaders(),
+    },
+    body: JSON.stringify({ token, password }),
+  });
+
+  return parseApiResponse(res);
+}
+
 export async function getCsrf() {
   const res = await fetch(`${apiBaseUrl}/auth/csrf`, {
     method: "GET",

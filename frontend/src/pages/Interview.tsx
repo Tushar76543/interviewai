@@ -38,12 +38,19 @@ interface FeedbackJobStatusResponse {
   jobId: string;
   status: "pending" | "processing" | "completed" | "failed";
   pollAfterMs?: number;
+  lastError?: string;
   provisionalFeedback?: Feedback;
   result?: {
     feedback: Feedback;
     followUp?: Question | null;
     source?: "heuristic" | "ai_calibrated";
   };
+}
+
+interface InterviewStartResponse {
+  question: Question;
+  sessionId?: string;
+  questionIndex?: number;
 }
 
 const ROLE_OPTIONS = [
@@ -84,6 +91,7 @@ const SPEECH_LANGUAGE_OPTIONS = [
 ];
 
 const MIN_RECOMMENDED_WORDS = 40;
+const MIN_RECORDING_SIZE_BYTES = 1024;
 
 const getWordCount = (text: string) => {
   const trimmed = text.trim();
@@ -198,6 +206,7 @@ function Interview() {
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number | null>(null);
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [showCamera, setShowCamera] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -360,6 +369,7 @@ function Interview() {
     setIsEvaluationPending(false);
     setEvaluationStatusText("");
     setEvaluationJobId(null);
+    setFeedback(null);
     SpeechRecognition.stopListening();
     resetTranscript();
     const recorder = mediaRecorderRef.current;
@@ -465,6 +475,7 @@ function Interview() {
     setFeedback(null);
     setAnswer("");
     setSessionId(null);
+    setCurrentQuestionIndex(null);
     setHistory([]);
     setTemplateNotice("");
     setVoiceError("");
@@ -479,11 +490,17 @@ function Interview() {
 
     try {
       const res = await api.post("/interview/start", { role, difficulty, category }, { timeout: 12000 });
-      setQuestion(res.data.question);
-      setHistory([res.data.question]);
-      setSessionId(res.data.sessionId || null);
+      const payload = res.data as InterviewStartResponse;
+      setQuestion(payload.question);
+      setHistory([payload.question]);
+      setSessionId(payload.sessionId || null);
+      setCurrentQuestionIndex(
+        typeof payload.questionIndex === "number" && Number.isFinite(payload.questionIndex)
+          ? payload.questionIndex
+          : 0
+      );
       if (autoSpeak) {
-        speak(res.data.question.prompt);
+        speak(payload.question.prompt);
       }
     } catch (requestError: unknown) {
       setError(extractApiErrorMessage(requestError, "Could not start interview."));
@@ -517,12 +534,19 @@ function Interview() {
           .filter((item): item is string => typeof item === "string" && item.length > 0),
         sessionId,
       }, { timeout: 12000 });
-      setQuestion(res.data.question);
-      setHistory((prev) => [...prev, res.data.question]);
-      setSessionId(res.data.sessionId || sessionId);
+      const payload = res.data as InterviewStartResponse;
+      setQuestion(payload.question);
+      setHistory((prev) => [...prev, payload.question]);
+      setSessionId(payload.sessionId || sessionId);
+      setCurrentQuestionIndex((prev) => {
+        if (typeof payload.questionIndex === "number" && Number.isFinite(payload.questionIndex)) {
+          return payload.questionIndex;
+        }
+        return typeof prev === "number" ? prev + 1 : null;
+      });
       setAnswer("");
       if (autoSpeak) {
-        speak(res.data.question.prompt);
+        speak(payload.question.prompt);
       }
     } catch (requestError: unknown) {
       setError(extractApiErrorMessage(requestError, "Could not generate next question."));
@@ -560,6 +584,12 @@ function Interview() {
     if (!recorder || recorder.state === "inactive") {
       setIsVideoRecording(false);
       return;
+    }
+
+    try {
+      recorder.requestData();
+    } catch {
+      // Some browsers throw if requestData is called at the wrong state.
     }
     recorder.stop();
   }, []);
@@ -617,6 +647,18 @@ function Interview() {
     recorder.onstop = () => {
       const mimeType = recorder.mimeType || selectedMime || "video/webm";
       const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+      recordingChunksRef.current = [];
+
+      if (blob.size < MIN_RECORDING_SIZE_BYTES) {
+        setRecordingBlob(null);
+        setRecordingUrl("");
+        setRecordingDurationSec(0);
+        setIsVideoRecording(false);
+        setRecordingStatus("");
+        setRecordingError("Recording is empty or too short. Please record again.");
+        return;
+      }
+
       const nextUrl = URL.createObjectURL(blob);
       const startedAt = recordingStartRef.current ?? Date.now();
       const durationSeconds = Math.max(1, Math.round((Date.now() - startedAt) / 1000));
@@ -647,10 +689,17 @@ function Interview() {
       return;
     }
 
+    if (recordingBlob.size < MIN_RECORDING_SIZE_BYTES) {
+      throw new Error("Recording is empty or too short");
+    }
+
     const extension = recordingBlob.type.includes("mp4") ? "mp4" : "webm";
     const formData = new FormData();
     formData.append("recording", recordingBlob, `answer-recording-${Date.now()}.${extension}`);
     formData.append("sessionId", sessionId);
+    if (typeof currentQuestionIndex === "number" && Number.isFinite(currentQuestionIndex)) {
+      formData.append("questionIndex", String(currentQuestionIndex));
+    }
 
     await api.post("/interview/recording", formData, {
       timeout: 20000,
@@ -658,7 +707,7 @@ function Interview() {
         "Content-Type": "multipart/form-data",
       },
     });
-  }, [recordingBlob, sessionId]);
+  }, [currentQuestionIndex, recordingBlob, sessionId]);
 
   const pollFeedbackJob = useCallback(async (jobId: string, initialPollAfterMs: number) => {
     let delayMs = Math.max(450, Math.min(2600, initialPollAfterMs || 1200));
@@ -680,7 +729,7 @@ function Interview() {
         }
 
         if (payload.status === "failed") {
-          throw new Error("Evaluation job failed. Please submit again.");
+          throw new Error(payload.lastError || "Evaluation job failed. Please submit again.");
         }
 
         if (payload.provisionalFeedback) {
@@ -733,6 +782,7 @@ function Interview() {
     const speechTranscript = cleanTranscriptText(speechTranscriptLog || transcriptRef.current);
     const answerDurationSec = Math.max(0, Math.round(elapsedSeconds));
     const cameraSnapshot = captureCameraSnapshot();
+    const activeQuestionIndex = currentQuestionIndex;
     let hasProvisionalFeedback = false;
 
     try {
@@ -754,6 +804,10 @@ function Interview() {
         answerDurationSec,
         cameraSnapshot: cameraSnapshot || undefined,
         sessionId,
+        sessionQuestionIndex:
+          typeof activeQuestionIndex === "number" && Number.isFinite(activeQuestionIndex)
+            ? activeQuestionIndex
+            : undefined,
       }, { timeout: 9000 });
 
       const jobPayload = createJobResponse.data as FeedbackJobCreateResponse;
@@ -785,6 +839,7 @@ function Interview() {
       if (draftStorageKey && typeof window !== "undefined") {
         window.localStorage.removeItem(draftStorageKey);
       }
+      clearRecordingArtifacts();
 
       if (autoSpeak) {
         speak(
@@ -800,6 +855,9 @@ function Interview() {
 
         setQuestion(followUpQuestion);
         setHistory((prev) => [...prev, followUpQuestion]);
+        if (typeof activeQuestionIndex === "number" && Number.isFinite(activeQuestionIndex)) {
+          setCurrentQuestionIndex(activeQuestionIndex + 1);
+        }
         setAnswer("");
       }
     } catch (requestError: unknown) {
@@ -820,6 +878,8 @@ function Interview() {
     autoSpeak,
     captureCameraSnapshot,
     category,
+    clearRecordingArtifacts,
+    currentQuestionIndex,
     elapsedSeconds,
     listening,
     recordingBlob,

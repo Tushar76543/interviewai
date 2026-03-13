@@ -8,6 +8,8 @@ const QUESTION_MAX_LENGTH = 1000;
 const ANSWER_MAX_LENGTH = 5000;
 const TRANSCRIPT_MAX_LENGTH = 5000;
 const CAMERA_SNAPSHOT_MAX_LENGTH = 450000;
+const RESET_TOKEN_MIN_LENGTH = 40;
+const RESET_TOKEN_MAX_LENGTH = 200;
 
 export const signupValidation = [
   body("name")
@@ -16,17 +18,49 @@ export const signupValidation = [
     .withMessage("Name must be between 2 and 60 characters"),
   body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
   body("password")
-    .isLength({ min: 8, max: 128 })
-    .withMessage("Password must be between 8 and 128 characters")
+    .isLength({ min: 12, max: 128 })
+    .withMessage("Password must be between 12 and 128 characters")
+    .matches(/[A-Z]/)
+    .withMessage("Password must contain at least one uppercase letter")
+    .matches(/[a-z]/)
+    .withMessage("Password must contain at least one lowercase letter")
     .matches(/\d/)
     .withMessage("Password must contain at least one number")
-    .matches(/[a-zA-Z]/)
-    .withMessage("Password must contain at least one letter"),
+    .matches(/[^A-Za-z0-9]/)
+    .withMessage("Password must contain at least one special character")
+    .not()
+    .matches(/\s/)
+    .withMessage("Password cannot include spaces"),
 ];
 
 export const loginValidation = [
   body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
   body("password").isString().notEmpty().withMessage("Password is required"),
+];
+
+export const forgotPasswordValidation = [
+  body("email").trim().isEmail().normalizeEmail().withMessage("Valid email is required"),
+];
+
+export const resetPasswordValidation = [
+  body("token")
+    .trim()
+    .isLength({ min: RESET_TOKEN_MIN_LENGTH, max: RESET_TOKEN_MAX_LENGTH })
+    .withMessage("A valid password reset token is required"),
+  body("password")
+    .isLength({ min: 12, max: 128 })
+    .withMessage("Password must be between 12 and 128 characters")
+    .matches(/[A-Z]/)
+    .withMessage("Password must contain at least one uppercase letter")
+    .matches(/[a-z]/)
+    .withMessage("Password must contain at least one lowercase letter")
+    .matches(/\d/)
+    .withMessage("Password must contain at least one number")
+    .matches(/[^A-Za-z0-9]/)
+    .withMessage("Password must contain at least one special character")
+    .not()
+    .matches(/\s/)
+    .withMessage("Password cannot include spaces"),
 ];
 
 export const googleAuthValidation = [
@@ -121,6 +155,10 @@ export const feedbackValidation = [
     .withMessage(`cameraSnapshot is too large (max ${CAMERA_SNAPSHOT_MAX_LENGTH} chars)`)
     .matches(/^data:image\/(jpeg|jpg|png);base64,/i)
     .withMessage("cameraSnapshot must be a base64 encoded image data URL"),
+  body("sessionQuestionIndex")
+    .optional()
+    .isInt({ min: 0, max: 200 })
+    .withMessage("sessionQuestionIndex must be between 0 and 200"),
   body("sessionId")
     .optional()
     .isMongoId()

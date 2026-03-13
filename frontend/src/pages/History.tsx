@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import api from "../services/api";
+import api, { apiBaseUrl } from "../services/api";
 import NavHeader from "../components/NavHeader";
 import "../App.css";
 import { extractApiErrorMessage } from "../utils/http";
@@ -40,7 +40,11 @@ interface Session {
   lastActivityAt: string;
 }
 
+const hasRecordedAnswer = (entry: QAEntry) =>
+  typeof entry.answer === "string" && entry.answer.trim().length > 0;
+
 const questionAverage = (entry: QAEntry) => {
+  if (!hasRecordedAnswer(entry)) return null;
   if (!entry.feedback) return null;
   if (typeof entry.feedback.overall === "number") {
     return entry.feedback.overall;
@@ -54,6 +58,9 @@ export default function History() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [recordingUrls, setRecordingUrls] = useState<Record<string, string>>({});
+  const [recordingLoading, setRecordingLoading] = useState<Record<string, boolean>>({});
+  const [recordingFailed, setRecordingFailed] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     api
@@ -64,6 +71,70 @@ export default function History() {
       })
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!expandedId) {
+      return;
+    }
+
+    const expandedSession = sessions.find((session) => session._id === expandedId);
+    if (!expandedSession) {
+      return;
+    }
+
+    const recordingIds = expandedSession.questions
+      .map((entry) => entry.recordingFileId)
+      .filter((item): item is string => typeof item === "string" && item.length > 0);
+
+    if (recordingIds.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchSignedRecordingUrl = async (recordingId: string) => {
+      if (recordingUrls[recordingId] || recordingLoading[recordingId] || recordingFailed[recordingId]) {
+        return;
+      }
+
+      setRecordingLoading((prev) => ({ ...prev, [recordingId]: true }));
+      try {
+        const response = await api.post(
+          "/interview/recording/signed-url",
+          { fileId: recordingId },
+          { timeout: 10000 }
+        );
+        const signedUrl =
+          typeof response.data?.signedUrl === "string" && response.data.signedUrl.trim()
+            ? response.data.signedUrl.trim()
+            : "";
+        if (!signedUrl) {
+          throw new Error("Signed URL unavailable");
+        }
+
+        if (!cancelled) {
+          setRecordingUrls((prev) => ({ ...prev, [recordingId]: signedUrl }));
+        }
+      } catch {
+        // Keep authenticated direct stream URL fallback when signed URL fetch fails.
+        if (!cancelled) {
+          setRecordingFailed((prev) => ({ ...prev, [recordingId]: true }));
+        }
+      } finally {
+        if (!cancelled) {
+          setRecordingLoading((prev) => ({ ...prev, [recordingId]: false }));
+        }
+      }
+    };
+
+    recordingIds.forEach((recordingId) => {
+      void fetchSignedRecordingUrl(recordingId);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedId, recordingFailed, recordingLoading, recordingUrls, sessions]);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -102,7 +173,7 @@ export default function History() {
       lines.push(entry.answer || "No answer recorded.");
       lines.push(``);
 
-      if (entry.feedback) {
+      if (entry.feedback && hasRecordedAnswer(entry)) {
         const overall =
           typeof entry.feedback.overall === "number"
             ? entry.feedback.overall
@@ -233,8 +304,13 @@ export default function History() {
                                   <video
                                     controls
                                     preload="metadata"
-                                    src={`/api/interview/recording/${entry.recordingFileId}`}
+                                    crossOrigin="use-credentials"
+                                    src={
+                                      recordingUrls[entry.recordingFileId] ||
+                                      `${apiBaseUrl}/interview/recording/${entry.recordingFileId}`
+                                    }
                                   />
+                                  {recordingLoading[entry.recordingFileId] && <span>Preparing secure video...</span>}
                                   {typeof entry.recordingSizeBytes === "number" && (
                                     <span>
                                       Size: {(entry.recordingSizeBytes / (1024 * 1024)).toFixed(2)} MB
@@ -244,7 +320,7 @@ export default function History() {
                               )}
                             </div>
                           )}
-                          {entry.feedback && (
+                          {entry.feedback && hasRecordedAnswer(entry) && (
                             <div className="history-feedback">
                               <span>Technical: {entry.feedback.technical}/10</span>
                               <span>Clarity: {entry.feedback.clarity}/10</span>

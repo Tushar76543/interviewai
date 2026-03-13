@@ -17,6 +17,7 @@ interface FeedbackScore {
 
 interface SessionQuestion {
   category?: string;
+  answer?: string;
   feedback?: FeedbackScore;
 }
 
@@ -75,6 +76,9 @@ const questionScore = (feedback?: FeedbackScore) => {
   return (feedback.technical + feedback.clarity + feedback.completeness) / 3;
 };
 
+const hasAnsweredText = (entry: SessionQuestion) =>
+  typeof entry.answer === "string" && entry.answer.trim().length > 0;
+
 const roundToOneDecimal = (value: number) => Math.round(value * 10) / 10;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -126,7 +130,7 @@ export default function Dashboard() {
     return sessions
       .map((session) => {
         const scores = session.questions
-          .map((entry) => questionScore(entry.feedback))
+          .map((entry) => (hasAnsweredText(entry) ? questionScore(entry.feedback) : null))
           .filter((score): score is number => typeof score === "number" && Number.isFinite(score));
 
         if (scores.length === 0) {
@@ -154,7 +158,10 @@ export default function Dashboard() {
   const scoredQuestions = useMemo(() => {
     return sessions.flatMap((session) =>
       session.questions
-        .filter((entry): entry is SessionQuestion & { feedback: FeedbackScore } => Boolean(entry.feedback))
+        .filter(
+          (entry): entry is SessionQuestion & { feedback: FeedbackScore } =>
+            hasAnsweredText(entry) && Boolean(entry.feedback)
+        )
         .map((entry) => ({
           category: entry.category || "General",
           score: questionScore(entry.feedback)!,

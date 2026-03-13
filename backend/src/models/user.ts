@@ -6,9 +6,14 @@ export interface IUser extends Document {
   name?: string;
   email: string;
   passwordHash?: string;
+  passwordHistory?: string[];
+  passwordResetTokenHash?: string;
+  passwordResetExpiresAt?: Date;
   authProvider: AuthProvider;
   googleId?: string;
   avatarUrl?: string;
+  lastLoginAt?: Date;
+  lastLoginFingerprint?: string;
   rolePreferences: string[];
   interviewHistory: string[];
   createdAt?: Date;
@@ -27,6 +32,9 @@ const UserSchema = new Schema<IUser>(
       index: true,
     },
     passwordHash: { type: String },
+    passwordHistory: { type: [String], default: [] },
+    passwordResetTokenHash: { type: String, index: true },
+    passwordResetExpiresAt: { type: Date },
     authProvider: {
       type: String,
       enum: ["local", "google"],
@@ -41,6 +49,8 @@ const UserSchema = new Schema<IUser>(
       index: true,
     },
     avatarUrl: { type: String, trim: true },
+    lastLoginAt: { type: Date },
+    lastLoginFingerprint: { type: String },
     rolePreferences: { type: [String], default: [] },
     interviewHistory: { type: [String], default: [] },
   },
@@ -58,5 +68,7 @@ UserSchema.pre("save", function normalizeUser(next) {
 
   next();
 });
+
+UserSchema.index({ lastLoginAt: -1 });
 
 export default mongoose.models.User || mongoose.model<IUser>("User", UserSchema);

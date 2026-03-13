@@ -1,9 +1,12 @@
 import { Router, Request } from "express";
+import crypto from "crypto";
 import multer from "multer";
 import mongoose from "mongoose";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import { recordingRateLimit } from "../middleware/rateLimit.middleware.js";
 import InterviewSession from "../models/interviewSession.js";
+import { getRuntimeStore } from "../lib/runtimeStore.js";
+import { getEnvConfig } from "../config/env.js";
 import {
   deleteRecordingFile,
   getRecordingFileById,
@@ -24,6 +27,28 @@ const MAX_RECORDING_SIZE_BYTES = Number.parseInt(
   process.env.MAX_RECORDING_FILE_SIZE_BYTES ?? `${25 * 1024 * 1024}`,
   10
 );
+const SIGNED_RECORDING_TOKEN_TTL_SEC = Math.max(
+  60,
+  Number.parseInt(process.env.RECORDING_SIGNED_URL_TTL_SEC ?? "600", 10)
+);
+const { redisKeyPrefix } = getEnvConfig();
+const SIGNED_RECORDING_NAMESPACE = `${redisKeyPrefix}:recording:signed`;
+const runtimeStore = getRuntimeStore();
+
+const parseOptionalQuestionIndex = (value: unknown) => {
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isInteger(parsed)) {
+      return parsed;
+    }
+  }
+
+  return undefined;
+};
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -51,6 +76,133 @@ const upload = multer({
 });
 
 const router = Router();
+
+const signedRecordingKey = (token: string) => `${SIGNED_RECORDING_NAMESPACE}:${token}`;
+
+const issueSignedRecordingToken = async (params: { fileId: string; userId: string }) => {
+  const token = crypto.randomBytes(24).toString("hex");
+  await runtimeStore.setEx(
+    signedRecordingKey(token),
+    JSON.stringify({
+      fileId: params.fileId,
+      userId: params.userId,
+      issuedAt: Date.now(),
+    }),
+    SIGNED_RECORDING_TOKEN_TTL_SEC
+  );
+  return token;
+};
+
+const readSignedRecordingToken = async (token: string) => {
+  const raw = await runtimeStore.get(signedRecordingKey(token));
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { fileId?: string; userId?: string };
+    if (typeof parsed.fileId !== "string" || typeof parsed.userId !== "string") {
+      return null;
+    }
+
+    return {
+      fileId: parsed.fileId,
+      userId: parsed.userId,
+    };
+  } catch {
+    return null;
+  }
+};
+
+router.get("/signed/:token", async (req, res) => {
+  try {
+    const token = (req.params.token ?? "").trim();
+    if (!/^[a-f0-9]{24,80}$/i.test(token)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid signed recording token",
+      });
+    }
+
+    const payload = await readSignedRecordingToken(token);
+    if (!payload) {
+      return res.status(404).json({
+        success: false,
+        message: "Signed recording URL is invalid or expired",
+      });
+    }
+
+    const fileDoc = await getRecordingFileById(payload.fileId);
+    const ownerId = (fileDoc?.metadata as { userId?: string } | undefined)?.userId;
+
+    if (!fileDoc || !ownerId || ownerId !== payload.userId) {
+      return res.status(404).json({
+        success: false,
+        message: "Recording not found",
+      });
+    }
+
+    const streamed = await streamRecordingFile({
+      fileId: payload.fileId,
+      rangeHeader: req.headers.range,
+      res,
+    });
+
+    if (!streamed) {
+      return res.status(404).json({
+        success: false,
+        message: "Recording not found",
+      });
+    }
+
+    return undefined;
+  } catch {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to stream signed recording",
+    });
+  }
+});
+
+router.post("/signed-url", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as Request & { user: { _id: string } }).user;
+    const { fileId } = req.body as { fileId?: string };
+
+    if (!fileId || !mongoose.isValidObjectId(fileId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid fileId is required",
+      });
+    }
+
+    const fileDoc = await getRecordingFileById(fileId);
+    const ownerId = (fileDoc?.metadata as { userId?: string } | undefined)?.userId;
+
+    if (!fileDoc || !ownerId || ownerId !== user._id) {
+      return res.status(404).json({
+        success: false,
+        message: "Recording not found",
+      });
+    }
+
+    const token = await issueSignedRecordingToken({
+      fileId,
+      userId: user._id,
+    });
+
+    return res.json({
+      success: true,
+      signedUrl: `/api/interview/recording/signed/${token}`,
+      expiresInSec: SIGNED_RECORDING_TOKEN_TTL_SEC,
+    });
+  } catch {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to issue signed recording URL",
+    });
+  }
+});
 
 router.get("/:fileId", authMiddleware, async (req, res) => {
   try {
@@ -126,12 +278,22 @@ router.post(
     try {
       const user = (req as Request & { user: { _id: string } }).user;
       const typedReq = req as RecordingUploadRequest;
-      const { sessionId } = req.body as { sessionId?: string };
+      const { sessionId, questionIndex } = req.body as {
+        sessionId?: string;
+        questionIndex?: unknown;
+      };
 
       if (!typedReq.file) {
         return res.status(400).json({
           success: false,
           message: "No recording uploaded",
+        });
+      }
+
+      if (!typedReq.file.size || typedReq.file.size < 1024) {
+        return res.status(400).json({
+          success: false,
+          message: "Recording is empty or too short",
         });
       }
 
@@ -154,7 +316,21 @@ router.post(
         });
       }
 
-      const targetIndex = session.questions.length - 1;
+      const parsedQuestionIndex = parseOptionalQuestionIndex(questionIndex);
+      if (
+        typeof parsedQuestionIndex === "number" &&
+        (parsedQuestionIndex < 0 || parsedQuestionIndex >= session.questions.length)
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "questionIndex is out of range for this session",
+        });
+      }
+
+      const targetIndex =
+        typeof parsedQuestionIndex === "number"
+          ? parsedQuestionIndex
+          : session.questions.length - 1;
       const existingRecordingId = session.questions[targetIndex].recordingFileId;
 
       const saved = await saveRecordingFile({
@@ -184,6 +360,7 @@ router.post(
           fileId: saved.fileId,
           mimeType: saved.mimeType,
           sizeBytes: saved.sizeBytes,
+          questionIndex: targetIndex,
           streamUrl: `/api/interview/recording/${saved.fileId}`,
         },
       });

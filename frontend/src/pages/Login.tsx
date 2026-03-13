@@ -4,6 +4,10 @@ import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
 import GoogleSignInButton from "../components/GoogleSignInButton";
 import { Eye, EyeOff } from "lucide-react";
+import {
+  googleSigninNotConfiguredMessage,
+  hasGoogleOauthClientId,
+} from "../utils/googleAuth";
 import "../App.css";
 import "../styles/auth-modern.css";
 
@@ -16,7 +20,6 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
-  const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
   const canSubmit = email.trim().length > 0 && password.trim().length > 0 && !loading;
 
   const submit = async (event: React.FormEvent) => {
@@ -64,7 +67,7 @@ export default function Login() {
           <p>Sign in to continue to InterviewPilot</p>
         </div>
         <div className="auth-modern-top-oauth">
-          {hasGoogleClientId ? (
+          {hasGoogleOauthClientId ? (
             <GoogleSignInButton
               className="auth-modern-google"
               onSuccess={handleGoogleSuccess}
@@ -78,9 +81,7 @@ export default function Login() {
             <button
               type="button"
               className="auth-modern-google-fallback"
-              onClick={() =>
-                setErr("Google sign-in is not configured yet. Add VITE_GOOGLE_CLIENT_ID to enable it.")
-              }
+              onClick={() => setErr(googleSigninNotConfiguredMessage)}
             >
               Continue with Google
             </button>
@@ -113,12 +114,12 @@ export default function Login() {
               <label className="auth-modern-label" htmlFor="password">
                 Password
               </label>
-              <a
+              <Link
                 className="auth-modern-inline-link"
-                href="mailto:support@interviewpilot.app?subject=Password%20reset%20request"
+                to="/forgot-password"
               >
                 Forgot your password?
-              </a>
+              </Link>
             </div>
             <div className="auth-modern-password-wrap">
               <input

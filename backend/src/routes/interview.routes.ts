@@ -63,7 +63,9 @@ router.post(
         });
       }
 
-      return res.json({ question, sessionId: session._id });
+      const questionIndex = Math.max(0, session.questions.length - 1);
+
+      return res.json({ question, sessionId: session._id, questionIndex });
     } catch (error) {
       const isProduction = process.env.NODE_ENV === "production";
 

@@ -1,4 +1,6 @@
 import axios from "axios";
+import { executeWithAiResilience } from "../lib/aiResilience.js";
+import { logger } from "../lib/observability.js";
 
 type GeneratedQuestion = {
   qid: string;
@@ -33,6 +35,27 @@ const REQUEST_TIMEOUT_MS = 7000;
 const RESPONSE_MAX_TOKENS = 320;
 const MIXED_CATEGORY = "Mixed";
 const SUPPORTED_DIFFICULTIES = ["Easy", "Medium", "FAANG"] as const;
+const QUESTION_PRIMARY_MODEL =
+  process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL;
+const QUESTION_FALLBACK_MODELS = (
+  process.env.OPENROUTER_QUESTION_FALLBACK_MODELS || process.env.OPENROUTER_MODEL_FALLBACKS || ""
+)
+  .split(",")
+  .map((item) => item.trim())
+  .filter(Boolean);
+
+const isRetriableProviderError = (error: unknown) => {
+  if (!axios.isAxiosError(error)) {
+    return false;
+  }
+
+  const status = error.response?.status;
+  if (!status) {
+    return true;
+  }
+
+  return status === 429 || status >= 500 || error.code === "ECONNABORTED";
+};
 
 const cleanText = (value: string, maxLength: number) =>
   value.replace(/\s+/g, " ").trim().slice(0, maxLength);
@@ -336,27 +359,42 @@ Return JSON only in this format:
     : "https://interviewpilot.app";
 
   try {
-    const response = await axios.post(
-      OPENROUTER_ENDPOINT,
-      {
-        model: process.env.OPENROUTER_QUESTION_MODEL || process.env.OPENROUTER_MODEL || DEFAULT_MODEL,
-        messages: [
-          { role: "system", content: "You are the InterviewPilot AI Interview Coach." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.5,
-        max_tokens: RESPONSE_MAX_TOKENS,
-      },
-      {
-        timeout: REQUEST_TIMEOUT_MS,
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": referer,
-          "X-Title": "InterviewPilot Coach",
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const { result: response, model: selectedModel } = await executeWithAiResilience({
+      operation: "question_generation",
+      primaryModel: QUESTION_PRIMARY_MODEL,
+      fallbackModels: QUESTION_FALLBACK_MODELS,
+      maxRetries: 2,
+      execute: async (model) =>
+        axios.post(
+          OPENROUTER_ENDPOINT,
+          {
+            model,
+            messages: [
+              { role: "system", content: "You are the InterviewPilot AI Interview Coach." },
+              { role: "user", content: prompt },
+            ],
+            temperature: 0.5,
+            max_tokens: RESPONSE_MAX_TOKENS,
+          },
+          {
+            timeout: REQUEST_TIMEOUT_MS,
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "HTTP-Referer": referer,
+              "X-Title": "InterviewPilot Coach",
+              "Content-Type": "application/json",
+            },
+          }
+        ),
+      isRetriableError: isRetriableProviderError,
+    });
+
+    logger.info("ai.question_model_selected", {
+      model: selectedModel,
+      role: safeRole,
+      difficulty: resolvedDifficulty,
+      category: resolvedCategory,
+    });
 
     const text = response.data?.choices?.[0]?.message?.content;
     if (typeof text !== "string" || !text.trim()) {
@@ -384,6 +422,15 @@ Return JSON only in this format:
       throw error;
     }
 
+    if (error instanceof Error && /circuit breaker is open/i.test(error.message)) {
+      return buildFallbackQuestion(
+        safeRole,
+        resolvedDifficulty,
+        resolvedCategory,
+        safePrevious.length
+      );
+    }
+
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const rawPayload = error.response?.data;
@@ -394,7 +441,7 @@ Return JSON only in this format:
             ? JSON.stringify(rawPayload)
             : "";
 
-      console.error("OpenRouter question generation error", {
+      logger.error("ai.question_generation_error", {
         status,
         axiosCode: error.code,
         message: error.message,
@@ -417,7 +464,7 @@ Return JSON only in this format:
       throw new AiProviderError("AI_PROVIDER_ERROR", "AI provider request failed", 502);
     }
 
-    console.error("Unexpected question generation error", error);
+    logger.errorWithException("ai.question_generation_unexpected_error", error);
     return buildFallbackQuestion(
       safeRole,
       resolvedDifficulty,

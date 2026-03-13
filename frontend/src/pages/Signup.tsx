@@ -4,6 +4,10 @@ import { useAuth } from "../auth/AuthContext";
 import { useNavigate, Link } from "react-router-dom";
 import GoogleSignInButton from "../components/GoogleSignInButton";
 import { Eye, EyeOff } from "lucide-react";
+import {
+  googleSignupNotConfiguredMessage,
+  hasGoogleOauthClientId,
+} from "../utils/googleAuth";
 import "../App.css";
 import "../styles/auth-modern.css";
 
@@ -17,11 +21,10 @@ export default function Signup() {
   const [showPassword, setShowPassword] = useState(false);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
-  const hasGoogleClientId = Boolean((import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim());
   const canSubmit =
     name.trim().length > 1 &&
     email.trim().length > 0 &&
-    password.trim().length >= 8 &&
+    password.trim().length >= 12 &&
     !loading;
 
   const submit = async (event: React.FormEvent) => {
@@ -68,7 +71,7 @@ export default function Signup() {
           <p>Build your InterviewPilot profile in seconds</p>
         </div>
         <div className="auth-modern-top-oauth">
-          {hasGoogleClientId ? (
+          {hasGoogleOauthClientId ? (
             <GoogleSignInButton
               className="auth-modern-google"
               onSuccess={handleGoogleSuccess}
@@ -82,9 +85,7 @@ export default function Signup() {
             <button
               type="button"
               className="auth-modern-google-fallback"
-              onClick={() =>
-                setErr("Google sign-up is not configured yet. Add VITE_GOOGLE_CLIENT_ID to enable it.")
-              }
+              onClick={() => setErr(googleSignupNotConfiguredMessage)}
             >
               Sign up with Google
             </button>
@@ -139,9 +140,9 @@ export default function Signup() {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="Minimum 8 characters"
+                placeholder="Minimum 12 characters"
                 required
-                minLength={8}
+                minLength={12}
                 autoComplete="new-password"
               />
               <button
@@ -153,7 +154,9 @@ export default function Signup() {
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <span className="auth-modern-hint">Use at least 8 characters with letters and numbers</span>
+            <span className="auth-modern-hint">
+              Use at least 12 characters with uppercase, lowercase, number, and symbol.
+            </span>
           </div>
 
           {err && (

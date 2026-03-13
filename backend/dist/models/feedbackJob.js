@@ -44,10 +44,11 @@ const FeedbackJobSchema = new Schema({
     expiresAt: {
         type: Date,
         default: () => new Date(Date.now() + 1000 * 60 * 60 * 24),
-        index: true,
     },
 }, { timestamps: true });
 FeedbackJobSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 FeedbackJobSchema.index({ userId: 1, createdAt: -1 });
+FeedbackJobSchema.index({ userId: 1, status: 1, createdAt: -1 });
+FeedbackJobSchema.index({ sessionId: 1, sessionQuestionIndex: 1, createdAt: -1 });
 FeedbackJobSchema.index({ status: 1, processingStartedAt: 1 });
 export default mongoose.models.FeedbackJob || mongoose.model("FeedbackJob", FeedbackJobSchema);

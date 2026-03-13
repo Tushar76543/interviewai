@@ -29,6 +29,7 @@ type FeedbackRequestBody = {
   answerDurationSec?: number;
   cameraSnapshot?: string;
   sessionId?: string;
+  sessionQuestionIndex?: number;
 };
 
 const getUserId = (req: express.Request) =>
@@ -55,12 +56,21 @@ router.post(
         answerDurationSec,
         cameraSnapshot,
         sessionId,
+        sessionQuestionIndex,
       } = req.body as FeedbackRequestBody;
+
+      const trimmedAnswer = typeof answer === "string" ? answer.trim() : "";
+      if (!trimmedAnswer) {
+        return res.status(400).json({
+          success: false,
+          message: "Answer cannot be empty",
+        });
+      }
 
       const result = await generateFeedback(
         role,
         question,
-        answer,
+        trimmedAnswer,
         parseExpectedPoints(expectedPoints),
         { providerTimeoutMs: 5200 }
       );
@@ -68,8 +78,9 @@ router.post(
       await persistFeedbackToSession({
         userId,
         sessionId,
+        sessionQuestionIndex,
         question,
-        answer,
+        answer: trimmedAnswer,
         speechTranscript,
         answerDurationSec,
         cameraSnapshot,
@@ -104,18 +115,28 @@ router.post(
         answerDurationSec,
         cameraSnapshot,
         sessionId,
+        sessionQuestionIndex,
       } = req.body as FeedbackRequestBody;
+
+      const trimmedAnswer = typeof answer === "string" ? answer.trim() : "";
+      if (!trimmedAnswer) {
+        return res.status(400).json({
+          success: false,
+          message: "Answer cannot be empty",
+        });
+      }
 
       const { job, provisional } = await createFeedbackJob({
         userId,
         role,
         question,
-        answer,
+        answer: trimmedAnswer,
         expectedPoints: parseExpectedPoints(expectedPoints),
         speechTranscript,
         answerDurationSec,
         cameraSnapshot,
         sessionId,
+        sessionQuestionIndex,
       });
 
       startFeedbackJobProcessing(job.id, userId);

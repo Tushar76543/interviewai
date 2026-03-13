@@ -11,13 +11,21 @@ const parseExpectedPoints = (value) => Array.isArray(value) ? value.filter((item
 router.post("/", authMiddleware, feedbackRateLimit, ...feedbackValidation, handleValidationErrors, async (req, res) => {
     try {
         const userId = getUserId(req);
-        const { role, question, answer, expectedPoints, speechTranscript, answerDurationSec, cameraSnapshot, sessionId, } = req.body;
-        const result = await generateFeedback(role, question, answer, parseExpectedPoints(expectedPoints), { providerTimeoutMs: 5200 });
+        const { role, question, answer, expectedPoints, speechTranscript, answerDurationSec, cameraSnapshot, sessionId, sessionQuestionIndex, } = req.body;
+        const trimmedAnswer = typeof answer === "string" ? answer.trim() : "";
+        if (!trimmedAnswer) {
+            return res.status(400).json({
+                success: false,
+                message: "Answer cannot be empty",
+            });
+        }
+        const result = await generateFeedback(role, question, trimmedAnswer, parseExpectedPoints(expectedPoints), { providerTimeoutMs: 5200 });
         await persistFeedbackToSession({
             userId,
             sessionId,
+            sessionQuestionIndex,
             question,
-            answer,
+            answer: trimmedAnswer,
             speechTranscript,
             answerDurationSec,
             cameraSnapshot,
@@ -35,17 +43,25 @@ router.post("/", authMiddleware, feedbackRateLimit, ...feedbackValidation, handl
 router.post("/jobs", authMiddleware, feedbackRateLimit, ...feedbackValidation, handleValidationErrors, async (req, res) => {
     try {
         const userId = getUserId(req);
-        const { role, question, answer, expectedPoints, speechTranscript, answerDurationSec, cameraSnapshot, sessionId, } = req.body;
+        const { role, question, answer, expectedPoints, speechTranscript, answerDurationSec, cameraSnapshot, sessionId, sessionQuestionIndex, } = req.body;
+        const trimmedAnswer = typeof answer === "string" ? answer.trim() : "";
+        if (!trimmedAnswer) {
+            return res.status(400).json({
+                success: false,
+                message: "Answer cannot be empty",
+            });
+        }
         const { job, provisional } = await createFeedbackJob({
             userId,
             role,
             question,
-            answer,
+            answer: trimmedAnswer,
             expectedPoints: parseExpectedPoints(expectedPoints),
             speechTranscript,
             answerDurationSec,
             cameraSnapshot,
             sessionId,
+            sessionQuestionIndex,
         });
         startFeedbackJobProcessing(job.id, userId);
         return res.status(202).json({

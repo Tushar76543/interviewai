@@ -11,14 +11,24 @@ import authRoutes from "./routes/auth.routes.js";
 import historyRoutes from "./routes/history.routes.js";
 import resumeRoutes from "./routes/resume.routes.js";
 import recordingRoutes from "./routes/recording.routes.js";
+import opsRoutes from "./routes/ops.routes.js";
 import dbConnect from "./lib/db.js";
+import { startFeedbackQueueWorker } from "./services/feedbackJob.service.js";
+import { metricsHandler, observabilityMiddleware } from "./middleware/observability.middleware.js";
 import { csrfCookieMiddleware, requireCsrfProtection } from "./middleware/csrf.middleware.js";
 import { getEnvConfig } from "./config/env.js";
+import { logger } from "./lib/observability.js";
 const env = getEnvConfig();
 const app = express();
 const isProduction = env.isProduction;
 const defaultDevOrigins = isProduction ? [] : ["http://localhost:5173", "http://127.0.0.1:5173"];
 const allowedOrigins = new Set([...defaultDevOrigins, ...env.allowedCorsOrigins]);
+logger.info("redis.runtime.configuration", {
+    redisConfigured: env.redisConfigured,
+    redisKeyPrefix: env.redisKeyPrefix,
+    redisMemoryPolicy: env.redisMemoryPolicy,
+    redisPersistenceMode: env.redisPersistenceMode,
+});
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const frontendCandidates = [
@@ -68,6 +78,8 @@ const corsDelegate = (req, callback) => {
 };
 app.set("trust proxy", 1);
 app.disable("x-powered-by");
+startFeedbackQueueWorker();
+app.use(observabilityMiddleware);
 app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Frame-Options", "DENY");
@@ -83,6 +95,7 @@ app.use(cookieParser());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use("/api", csrfCookieMiddleware);
+app.get("/api/metrics", metricsHandler);
 const buildHealthPayload = () => ({
     uptime: Math.round(process.uptime()),
     timestamp: new Date().toISOString(),
@@ -133,12 +146,14 @@ app.use("/api/auth", (req, res, next) => {
 app.use("/api/interview", requireDb);
 app.use("/api/history", requireDb);
 app.use("/api/resume", requireDb);
+app.use("/api/ops", requireDb);
 app.use("/api/auth", authRoutes);
 app.use("/api/interview", interviewRoutes);
 app.use("/api/interview/feedback", feedbackRoutes);
 app.use("/api/interview/recording", recordingRoutes);
 app.use("/api/history", historyRoutes);
 app.use("/api/resume", resumeRoutes);
+app.use("/api/ops", opsRoutes);
 app.use("/api", (_req, res) => {
     res.status(404).json({
         success: false,
@@ -166,9 +181,16 @@ app.use((err, _req, res, _next) => {
         ? err.status
         : 500;
     const message = err instanceof Error && !isProduction ? err.message : "Internal server error";
+    const requestIdHeader = res.getHeader("X-Request-Id");
+    const requestId = typeof requestIdHeader === "string"
+        ? requestIdHeader
+        : Array.isArray(requestIdHeader)
+            ? requestIdHeader[0]
+            : "";
     res.status(statusCode).json({
         success: false,
         message,
+        requestId: requestId || undefined,
     });
 });
 export default app;

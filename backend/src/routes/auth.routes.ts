@@ -4,6 +4,8 @@ import {
   signupValidation,
   loginValidation,
   googleAuthValidation,
+  forgotPasswordValidation,
+  resetPasswordValidation,
   handleValidationErrors,
 } from "../middleware/validation.middleware.js";
 import { authRateLimit } from "../middleware/rateLimit.middleware.js";
@@ -35,6 +37,24 @@ router.post(
   googleAuthValidation,
   handleValidationErrors,
   AuthController.googleLogin
+);
+
+router.post("/refresh", authRateLimit, AuthController.refresh);
+
+router.post(
+  "/forgot-password",
+  authRateLimit,
+  forgotPasswordValidation,
+  handleValidationErrors,
+  AuthController.forgotPassword
+);
+
+router.post(
+  "/reset-password",
+  authRateLimit,
+  resetPasswordValidation,
+  handleValidationErrors,
+  AuthController.resetPassword
 );
 
 router.get("/me", AuthController.getMe);

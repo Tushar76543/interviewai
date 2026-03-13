@@ -1,11 +1,33 @@
 import jwt from "jsonwebtoken";
 import User from "../models/user.js";
+import { isTokenRevoked } from "../lib/authRuntimeStore.js";
 const extractToken = (req) => {
     const authHeader = req.headers.authorization;
     const bearerToken = typeof authHeader === "string" && authHeader.startsWith("Bearer ")
         ? authHeader.slice(7).trim()
         : "";
-    return req.cookies?.token || bearerToken;
+    return (req.cookies?.token || bearerToken).trim();
+};
+const decodeAccessToken = (token) => {
+    const jwtSecret = (process.env.JWT_SECRET ?? "").trim();
+    if (!jwtSecret) {
+        throw new Error("Server configuration error");
+    }
+    const decoded = jwt.verify(token, jwtSecret, {
+        algorithms: ["HS256"],
+    });
+    const userId = typeof decoded.id === "string" ? decoded.id : "";
+    if (!userId) {
+        throw new Error("Invalid token payload");
+    }
+    const tokenType = typeof decoded.type === "string" ? decoded.type : "";
+    if (tokenType && tokenType !== "access") {
+        throw new Error("Invalid token type");
+    }
+    return {
+        userId,
+        jti: typeof decoded.jti === "string" ? decoded.jti : "",
+    };
 };
 export const authMiddleware = async (req, res, next) => {
     try {
@@ -13,12 +35,11 @@ export const authMiddleware = async (req, res, next) => {
         if (!token) {
             return res.status(401).json({ message: "Not authenticated" });
         }
-        const jwtSecret = process.env.JWT_SECRET;
-        if (!jwtSecret) {
-            return res.status(500).json({ message: "Server configuration error" });
+        const decoded = decodeAccessToken(token);
+        if (decoded.jti && (await isTokenRevoked(decoded.jti))) {
+            return res.status(401).json({ message: "Token has been revoked" });
         }
-        const decoded = jwt.verify(token, jwtSecret);
-        const user = await User.findById(decoded.id).select("-passwordHash");
+        const user = await User.findById(decoded.userId).select("-passwordHash -passwordHistory -passwordResetTokenHash -passwordResetExpiresAt");
         if (!user) {
             return res.status(401).json({ message: "Invalid token" });
         }

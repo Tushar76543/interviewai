@@ -4006,8 +4006,8 @@ var init_recording_routes = __esm({
           });
         }
         const fileDoc = await getRecordingFileById(payload.fileId);
-        const ownerId = fileDoc?.metadata?.userId;
-        if (!fileDoc || !ownerId || ownerId !== payload.userId) {
+        const ownerId = String(fileDoc?.metadata?.userId || "");
+        if (!fileDoc || !ownerId || ownerId !== String(payload.userId)) {
           return res.status(404).json({
             success: false,
             message: "Recording not found"
@@ -4043,8 +4043,8 @@ var init_recording_routes = __esm({
           });
         }
         const fileDoc = await getRecordingFileById(fileId);
-        const ownerId = fileDoc?.metadata?.userId;
-        if (!fileDoc || !ownerId || ownerId !== user._id) {
+        const ownerId = String(fileDoc?.metadata?.userId || "");
+        if (!fileDoc || !ownerId || ownerId !== String(user._id)) {
           return res.status(404).json({
             success: false,
             message: "Recording not found"
@@ -4077,8 +4077,8 @@ var init_recording_routes = __esm({
           });
         }
         const fileDoc = await getRecordingFileById(fileId);
-        const ownerId = fileDoc?.metadata?.userId;
-        if (!fileDoc || !ownerId || ownerId !== user._id) {
+        const ownerId = String(fileDoc?.metadata?.userId || "");
+        if (!fileDoc || !ownerId || ownerId !== String(user._id)) {
           return res.status(404).json({
             success: false,
             message: "Recording not found"
@@ -4174,8 +4174,8 @@ var init_recording_routes = __esm({
             mimeType: typedReq.file.mimetype || "video/webm",
             filename: typedReq.file.originalname || `recording-${Date.now()}.webm`,
             metadata: {
-              userId: user._id,
-              sessionId,
+              userId: String(user._id),
+              sessionId: String(sessionId),
               questionIndex: targetIndex
             }
           });

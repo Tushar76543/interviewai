@@ -139,9 +139,9 @@ router.get("/signed/:token", async (req, res) => {
     }
 
     const fileDoc = await getRecordingFileById(payload.fileId);
-    const ownerId = (fileDoc?.metadata as { userId?: string } | undefined)?.userId;
+    const ownerId = String((fileDoc?.metadata as { userId?: string } | undefined)?.userId || "");
 
-    if (!fileDoc || !ownerId || ownerId !== payload.userId) {
+    if (!fileDoc || !ownerId || ownerId !== String(payload.userId)) {
       return res.status(404).json({
         success: false,
         message: "Recording not found",
@@ -183,9 +183,9 @@ router.post("/signed-url", authMiddleware, async (req, res) => {
     }
 
     const fileDoc = await getRecordingFileById(fileId);
-    const ownerId = (fileDoc?.metadata as { userId?: string } | undefined)?.userId;
+    const ownerId = String((fileDoc?.metadata as { userId?: string } | undefined)?.userId || "");
 
-    if (!fileDoc || !ownerId || ownerId !== user._id) {
+    if (!fileDoc || !ownerId || ownerId !== String(user._id)) {
       return res.status(404).json({
         success: false,
         message: "Recording not found",
@@ -223,9 +223,9 @@ router.get("/:fileId", authMiddleware, async (req, res) => {
     }
 
     const fileDoc = await getRecordingFileById(fileId);
-    const ownerId = (fileDoc?.metadata as { userId?: string } | undefined)?.userId;
+    const ownerId = String((fileDoc?.metadata as { userId?: string } | undefined)?.userId || "");
 
-    if (!fileDoc || !ownerId || ownerId !== user._id) {
+    if (!fileDoc || !ownerId || ownerId !== String(user._id)) {
       return res.status(404).json({
         success: false,
         message: "Recording not found",
@@ -344,8 +344,8 @@ router.post(
         mimeType: typedReq.file.mimetype || "video/webm",
         filename: typedReq.file.originalname || `recording-${Date.now()}.webm`,
         metadata: {
-          userId: user._id,
-          sessionId,
+          userId: String(user._id),
+          sessionId: String(sessionId),
           questionIndex: targetIndex,
         },
       });

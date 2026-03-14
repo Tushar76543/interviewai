@@ -686,14 +686,27 @@ function Interview() {
     setIsVideoRecording(true);
   }, [clearRecordingArtifacts, showCamera]);
 
+  // Auto-start video recording when camera is enabled and a question is active
   useEffect(() => {
-    if (showCamera) {
+    if (!showCamera) {
+      // Camera turned off – stop any active recording
+      stopVideoRecording();
+      setIsVideoRecording(false);
       return;
     }
 
-    stopVideoRecording();
-    setIsVideoRecording(false);
-  }, [showCamera, stopVideoRecording]);
+    // Camera is on, question is active, not already recording: auto-start
+    if (question && !isVideoRecording && !recordingBlob && !isBusy) {
+      // Give webcam a moment to initialise its stream before recording
+      const timerId = window.setTimeout(() => {
+        const stream = webcamRef.current?.stream;
+        if (stream && typeof MediaRecorder !== "undefined") {
+          startVideoRecording();
+        }
+      }, 800);
+      return () => window.clearTimeout(timerId);
+    }
+  }, [showCamera, question, isVideoRecording, recordingBlob, isBusy, stopVideoRecording, startVideoRecording]);
 
   const uploadRecordingIfNeeded = useCallback(async () => {
     if (!recordingBlob || !sessionId) {
@@ -798,11 +811,51 @@ function Interview() {
 
     try {
       setRecordingError("");
-      if (recordingBlob && sessionId) {
-        try {
-          await uploadRecordingIfNeeded();
-        } catch (uploadError: unknown) {
-          setRecordingError(extractApiErrorMessage(uploadError, "Recording upload failed. Continuing without video."));
+
+      // Auto-stop video recording on submit so the blob is finalised
+      const recorder = mediaRecorderRef.current;
+      let blobToUpload = recordingBlob;
+      if (recorder && recorder.state !== "inactive") {
+        blobToUpload = await new Promise<Blob | null>((resolve) => {
+          const existingOnStop = recorder.onstop;
+          recorder.onstop = (ev) => {
+            // Capture chunks BEFORE the original handler clears them
+            const chunks = [...recordingChunksRef.current];
+            const mimeType = recorder.mimeType || "video/webm";
+            const blob = new Blob(chunks, { type: mimeType });
+
+            // Now let the original handler run for state cleanup
+            if (typeof existingOnStop === "function") {
+              existingOnStop.call(recorder, ev);
+            }
+
+            resolve(blob.size >= MIN_RECORDING_SIZE_BYTES ? blob : null);
+          };
+          try { recorder.requestData(); } catch { /* ignore */ }
+          recorder.stop();
+        });
+        setIsVideoRecording(false);
+      }
+
+      if ((blobToUpload || recordingBlob) && sessionId) {
+        const uploadBlob = blobToUpload || recordingBlob;
+        if (uploadBlob && uploadBlob.size >= MIN_RECORDING_SIZE_BYTES) {
+          try {
+            // Upload using the captured blob directly if from auto-stop
+            const extension = uploadBlob.type.includes("mp4") ? "mp4" : "webm";
+            const formData = new FormData();
+            formData.append("recording", uploadBlob, `answer-recording-${Date.now()}.${extension}`);
+            formData.append("sessionId", sessionId);
+            if (typeof currentQuestionIndex === "number" && Number.isFinite(currentQuestionIndex)) {
+              formData.append("questionIndex", String(currentQuestionIndex));
+            }
+            await api.post("/interview/recording", formData, {
+              timeout: 20000,
+              headers: { "Content-Type": "multipart/form-data" },
+            });
+          } catch (uploadError: unknown) {
+            setRecordingError(extractApiErrorMessage(uploadError, "Recording upload failed. Continuing without video."));
+          }
         }
       }
 

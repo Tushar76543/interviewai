@@ -3844,10 +3844,11 @@ var init_recordingStore = __esm({
       const contentType = typeof fileDoc.contentType === "string" && fileDoc.contentType.trim() ? fileDoc.contentType : "video/webm";
       const fileLength = Number(fileDoc.length || 0);
       const objectId = fileDoc._id;
-      if (rangeHeader && /^bytes=\d*-\d*$/i.test(rangeHeader)) {
+      res.setHeader("Content-Disposition", "inline");
+      if (rangeHeader && /^bytes=\d+-/i.test(rangeHeader)) {
         const [startPart, endPart] = rangeHeader.replace(/bytes=/i, "").split("-");
         const start = Number.parseInt(startPart, 10);
-        const end = endPart ? Number.parseInt(endPart, 10) : fileLength - 1;
+        const end = endPart && endPart.trim() ? Number.parseInt(endPart, 10) : fileLength - 1;
         if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && end < fileLength) {
           const chunkSize = end - start + 1;
           res.status(206);

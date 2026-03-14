@@ -92,13 +92,22 @@ export const streamRecordingFile = async (params: {
   const fileLength = Number(fileDoc.length || 0);
   const objectId = fileDoc._id as mongoose.Types.ObjectId;
 
+  // Helper: download a GridFS stream into a Buffer.
+  // Vercel serverless functions don't reliably support stream.pipe(res),
+  // so we buffer the entire download and send it with res.end().
+  const downloadToBuffer = (downloadStream: import("stream").Readable): Promise<Buffer> =>
+    new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      downloadStream.on("data", (chunk: Buffer) => chunks.push(chunk));
+      downloadStream.on("end", () => resolve(Buffer.concat(chunks)));
+      downloadStream.on("error", reject);
+    });
+
   // Set Content-Disposition to inline so browsers render the video in-page
   res.setHeader("Content-Disposition", "inline");
 
   // Handle range requests – browsers send "bytes=0-" (open-ended) for initial
-  // metadata probes and "bytes=123-456" for seeking.  The previous regex
-  // `\d*-\d*` accidentally required digits on both sides when used with the
-  // subsequent parseInt, causing "bytes=0-" to produce NaN for the end part.
+  // metadata probes and "bytes=123-456" for seeking.
   if (rangeHeader && /^bytes=\d+-/i.test(rangeHeader)) {
     const [startPart, endPart] = rangeHeader.replace(/bytes=/i, "").split("-");
     const start = Number.parseInt(startPart, 10);
@@ -107,40 +116,45 @@ export const streamRecordingFile = async (params: {
     if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && end < fileLength) {
       const chunkSize = end - start + 1;
 
-      res.status(206);
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Accept-Ranges", "bytes");
-      res.setHeader("Content-Range", `bytes ${start}-${end}/${fileLength}`);
-      res.setHeader("Content-Length", chunkSize.toString());
-      res.setHeader("Cache-Control", "private, max-age=300");
+      try {
+        const downloadStream = bucket.openDownloadStream(objectId, {
+          start,
+          end: end + 1,
+        });
+        const buffer = await downloadToBuffer(downloadStream);
 
-      const stream = bucket.openDownloadStream(objectId, {
-        start,
-        end: end + 1,
-      });
-
-      stream.on("error", () => {
+        res.status(206);
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Content-Range", `bytes ${start}-${end}/${fileLength}`);
+        res.setHeader("Content-Length", buffer.length.toString());
+        res.setHeader("Cache-Control", "private, max-age=300");
+        res.end(buffer);
+        return true;
+      } catch {
         if (!res.headersSent) {
           res.status(500).end();
         }
-      });
-      stream.pipe(res);
-      return true;
+        return true;
+      }
     }
   }
 
-  res.status(200);
-  res.setHeader("Content-Type", contentType);
-  res.setHeader("Content-Length", fileLength.toString());
-  res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("Cache-Control", "private, max-age=300");
+  try {
+    const downloadStream = bucket.openDownloadStream(objectId);
+    const buffer = await downloadToBuffer(downloadStream);
 
-  const stream = bucket.openDownloadStream(objectId);
-  stream.on("error", () => {
+    res.status(200);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", buffer.length.toString());
+    res.setHeader("Accept-Ranges", "bytes");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.end(buffer);
+    return true;
+  } catch {
     if (!res.headersSent) {
       res.status(500).end();
     }
-  });
-  stream.pipe(res);
-  return true;
+    return true;
+  }
 };

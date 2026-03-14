@@ -3844,6 +3844,12 @@ var init_recordingStore = __esm({
       const contentType = typeof fileDoc.contentType === "string" && fileDoc.contentType.trim() ? fileDoc.contentType : "video/webm";
       const fileLength = Number(fileDoc.length || 0);
       const objectId = fileDoc._id;
+      const downloadToBuffer = (downloadStream) => new Promise((resolve, reject) => {
+        const chunks = [];
+        downloadStream.on("data", (chunk) => chunks.push(chunk));
+        downloadStream.on("end", () => resolve(Buffer.concat(chunks)));
+        downloadStream.on("error", reject);
+      });
       res.setHeader("Content-Disposition", "inline");
       if (rangeHeader && /^bytes=\d+-/i.test(rangeHeader)) {
         const [startPart, endPart] = rangeHeader.replace(/bytes=/i, "").split("-");
@@ -3851,38 +3857,44 @@ var init_recordingStore = __esm({
         const end = endPart && endPart.trim() ? Number.parseInt(endPart, 10) : fileLength - 1;
         if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && end < fileLength) {
           const chunkSize = end - start + 1;
-          res.status(206);
-          res.setHeader("Content-Type", contentType);
-          res.setHeader("Accept-Ranges", "bytes");
-          res.setHeader("Content-Range", `bytes ${start}-${end}/${fileLength}`);
-          res.setHeader("Content-Length", chunkSize.toString());
-          res.setHeader("Cache-Control", "private, max-age=300");
-          const stream2 = bucket.openDownloadStream(objectId, {
-            start,
-            end: end + 1
-          });
-          stream2.on("error", () => {
+          try {
+            const downloadStream = bucket.openDownloadStream(objectId, {
+              start,
+              end: end + 1
+            });
+            const buffer = await downloadToBuffer(downloadStream);
+            res.status(206);
+            res.setHeader("Content-Type", contentType);
+            res.setHeader("Accept-Ranges", "bytes");
+            res.setHeader("Content-Range", `bytes ${start}-${end}/${fileLength}`);
+            res.setHeader("Content-Length", buffer.length.toString());
+            res.setHeader("Cache-Control", "private, max-age=300");
+            res.end(buffer);
+            return true;
+          } catch {
             if (!res.headersSent) {
               res.status(500).end();
             }
-          });
-          stream2.pipe(res);
-          return true;
+            return true;
+          }
         }
       }
-      res.status(200);
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Length", fileLength.toString());
-      res.setHeader("Accept-Ranges", "bytes");
-      res.setHeader("Cache-Control", "private, max-age=300");
-      const stream = bucket.openDownloadStream(objectId);
-      stream.on("error", () => {
+      try {
+        const downloadStream = bucket.openDownloadStream(objectId);
+        const buffer = await downloadToBuffer(downloadStream);
+        res.status(200);
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Content-Length", buffer.length.toString());
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Cache-Control", "private, max-age=300");
+        res.end(buffer);
+        return true;
+      } catch {
         if (!res.headersSent) {
           res.status(500).end();
         }
-      });
-      stream.pipe(res);
-      return true;
+        return true;
+      }
     };
   }
 });

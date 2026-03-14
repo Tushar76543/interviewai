@@ -92,10 +92,17 @@ export const streamRecordingFile = async (params: {
   const fileLength = Number(fileDoc.length || 0);
   const objectId = fileDoc._id as mongoose.Types.ObjectId;
 
-  if (rangeHeader && /^bytes=\d*-\d*$/i.test(rangeHeader)) {
+  // Set Content-Disposition to inline so browsers render the video in-page
+  res.setHeader("Content-Disposition", "inline");
+
+  // Handle range requests – browsers send "bytes=0-" (open-ended) for initial
+  // metadata probes and "bytes=123-456" for seeking.  The previous regex
+  // `\d*-\d*` accidentally required digits on both sides when used with the
+  // subsequent parseInt, causing "bytes=0-" to produce NaN for the end part.
+  if (rangeHeader && /^bytes=\d+-/i.test(rangeHeader)) {
     const [startPart, endPart] = rangeHeader.replace(/bytes=/i, "").split("-");
     const start = Number.parseInt(startPart, 10);
-    const end = endPart ? Number.parseInt(endPart, 10) : fileLength - 1;
+    const end = endPart && endPart.trim() ? Number.parseInt(endPart, 10) : fileLength - 1;
 
     if (Number.isFinite(start) && Number.isFinite(end) && start >= 0 && end >= start && end < fileLength) {
       const chunkSize = end - start + 1;

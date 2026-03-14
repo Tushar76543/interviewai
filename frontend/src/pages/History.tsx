@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import api, { resolveApiAssetUrl } from "../services/api";
+import api from "../services/api";
 import NavHeader from "../components/NavHeader";
 import "../App.css";
 import { extractApiErrorMessage } from "../utils/http";
@@ -54,7 +54,7 @@ const questionAverage = (entry: QAEntry) => {
 };
 
 const buildDirectRecordingUrl = (recordingId: string) =>
-  resolveApiAssetUrl(`/api/interview/recording/${recordingId}`);
+  `/api/interview/recording/${recordingId}`;
 
 export default function History() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -109,13 +109,18 @@ export default function History() {
           { fileId: recordingId },
           { timeout: 10000 }
         );
-        const signedUrl =
-          typeof response.data?.signedUrl === "string" && response.data.signedUrl.trim()
-            ? resolveApiAssetUrl(response.data.signedUrl.trim())
-            : "";
-        if (!signedUrl) {
+        const rawSignedUrl =
+          typeof response.data?.signedUrl === "string" ? response.data.signedUrl.trim() : "";
+        if (!rawSignedUrl) {
           throw new Error("Signed URL unavailable");
         }
+
+        // Signed URLs are relative paths like /api/interview/recording/signed/<token>
+        // Keep them relative so the browser treats them as same-origin requests.
+        // Only resolve through resolveApiAssetUrl if the URL is already absolute.
+        const signedUrl = /^https?:\/\//i.test(rawSignedUrl)
+          ? rawSignedUrl
+          : rawSignedUrl;
 
         if (!cancelled) {
           setRecordingUrls((prev) => ({ ...prev, [recordingId]: signedUrl }));
@@ -343,7 +348,6 @@ export default function History() {
                                     controls
                                     preload="metadata"
                                     playsInline
-                                    crossOrigin="use-credentials"
                                     src={getRecordingUrl(entry.recordingFileId)}
                                     onLoadedMetadata={() => handleRecordingPlaybackReady(entry.recordingFileId!)}
                                     onCanPlay={() => handleRecordingPlaybackReady(entry.recordingFileId!)}

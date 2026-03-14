@@ -1,12 +1,11 @@
 import { Router, Request } from "express";
 import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import multer from "multer";
 import mongoose from "mongoose";
 import { authMiddleware } from "../middleware/auth.middleware.js";
 import { recordingRateLimit } from "../middleware/rateLimit.middleware.js";
 import InterviewSession from "../models/interviewSession.js";
-import { getRuntimeStore } from "../lib/runtimeStore.js";
-import { getEnvConfig } from "../config/env.js";
 import {
   deleteRecordingFile,
   getRecordingFileById,
@@ -31,9 +30,6 @@ const SIGNED_RECORDING_TOKEN_TTL_SEC = Math.max(
   60,
   Number.parseInt(process.env.RECORDING_SIGNED_URL_TTL_SEC ?? "600", 10)
 );
-const { redisKeyPrefix } = getEnvConfig();
-const SIGNED_RECORDING_NAMESPACE = `${redisKeyPrefix}:recording:signed`;
-const runtimeStore = getRuntimeStore();
 
 const parseOptionalQuestionIndex = (value: unknown) => {
   if (typeof value === "number" && Number.isInteger(value)) {
@@ -77,37 +73,47 @@ const upload = multer({
 
 const router = Router();
 
-const signedRecordingKey = (token: string) => `${SIGNED_RECORDING_NAMESPACE}:${token}`;
-
-const issueSignedRecordingToken = async (params: { fileId: string; userId: string }) => {
-  const token = crypto.randomBytes(24).toString("hex");
-  await runtimeStore.setEx(
-    signedRecordingKey(token),
-    JSON.stringify({
-      fileId: params.fileId,
-      userId: params.userId,
-      issuedAt: Date.now(),
-    }),
-    SIGNED_RECORDING_TOKEN_TTL_SEC
-  );
-  return token;
-};
-
-const readSignedRecordingToken = async (token: string) => {
-  const raw = await runtimeStore.get(signedRecordingKey(token));
-  if (!raw) {
-    return null;
+const getSignedRecordingSecret = () => {
+  const secret = (process.env.JWT_SECRET ?? "").trim();
+  if (!secret) {
+    throw new Error("JWT secret is not configured");
   }
 
+  return `${secret}:recording-signed`;
+};
+
+const issueSignedRecordingToken = (params: { fileId: string; userId: string }) =>
+  jwt.sign(
+    {
+      type: "recording",
+      fileId: params.fileId,
+      userId: params.userId,
+      nonce: crypto.randomBytes(12).toString("hex"),
+    },
+    getSignedRecordingSecret(),
+    {
+      algorithm: "HS256",
+      expiresIn: SIGNED_RECORDING_TOKEN_TTL_SEC,
+    }
+  );
+
+const readSignedRecordingToken = (token: string) => {
   try {
-    const parsed = JSON.parse(raw) as { fileId?: string; userId?: string };
-    if (typeof parsed.fileId !== "string" || typeof parsed.userId !== "string") {
+    const decoded = jwt.verify(token, getSignedRecordingSecret(), {
+      algorithms: ["HS256"],
+    }) as jwt.JwtPayload;
+
+    const fileId = typeof decoded.fileId === "string" ? decoded.fileId : "";
+    const userId = typeof decoded.userId === "string" ? decoded.userId : "";
+    const tokenType = typeof decoded.type === "string" ? decoded.type : "";
+
+    if (!fileId || !userId || tokenType !== "recording") {
       return null;
     }
 
     return {
-      fileId: parsed.fileId,
-      userId: parsed.userId,
+      fileId,
+      userId,
     };
   } catch {
     return null;
@@ -117,14 +123,14 @@ const readSignedRecordingToken = async (token: string) => {
 router.get("/signed/:token", async (req, res) => {
   try {
     const token = (req.params.token ?? "").trim();
-    if (!/^[a-f0-9]{24,80}$/i.test(token)) {
+    if (!/^[A-Za-z0-9._-]{24,2048}$/.test(token)) {
       return res.status(400).json({
         success: false,
         message: "Invalid signed recording token",
       });
     }
 
-    const payload = await readSignedRecordingToken(token);
+    const payload = readSignedRecordingToken(token);
     if (!payload) {
       return res.status(404).json({
         success: false,
@@ -186,7 +192,7 @@ router.post("/signed-url", authMiddleware, async (req, res) => {
       });
     }
 
-    const token = await issueSignedRecordingToken({
+    const token = issueSignedRecordingToken({
       fileId,
       userId: user._id,
     });

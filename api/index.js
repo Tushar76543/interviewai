@@ -826,7 +826,7 @@ var init_env = __esm({
       const redisRestUrl = redisPairAllowed ? redisRestUrlCandidate : "";
       const redisRestToken = redisPairAllowed ? redisRestTokenCandidate : "";
       const redisKeyPrefixCandidate = readEnv("REDIS_KEY_PREFIX").replace(/[:\s]+$/g, "");
-      const redisKeyPrefix4 = redisKeyPrefixCandidate || "ip";
+      const redisKeyPrefix3 = redisKeyPrefixCandidate || "ip";
       cachedConfig = {
         nodeEnv,
         isProduction: isProduction4,
@@ -838,7 +838,7 @@ var init_env = __esm({
         redisRestUrl,
         redisRestToken,
         redisConfigured: Boolean(redisRestUrl && redisRestToken),
-        redisKeyPrefix: redisKeyPrefix4,
+        redisKeyPrefix: redisKeyPrefix3,
         redisMemoryPolicy: readEnv("REDIS_MEMORY_POLICY") || "allkeys-lfu",
         redisPersistenceMode: readEnv("REDIS_PERSISTENCE_MODE") || "cache-only",
         metricsApiKey: readEnv("METRICS_API_KEY")
@@ -1379,8 +1379,8 @@ var init_rateLimitStore = __esm({
       }
       async consume(params) {
         const now = Date.now();
-        const { redisKeyPrefix: redisKeyPrefix4 } = getEnvConfig();
-        const namespacedKey = `${redisKeyPrefix4}:${params.bucket}:${params.key}`;
+        const { redisKeyPrefix: redisKeyPrefix3 } = getEnvConfig();
+        const namespacedKey = `${redisKeyPrefix3}:${params.bucket}:${params.key}`;
         const existing = this.buckets.get(namespacedKey);
         if (!existing || existing.resetAt <= now) {
           const resetAt = now + params.windowMs;
@@ -1410,8 +1410,8 @@ var init_rateLimitStore = __esm({
       }
       async consume(params) {
         const now = Date.now();
-        const { redisKeyPrefix: redisKeyPrefix4 } = getEnvConfig();
-        const key = `${redisKeyPrefix4}:${params.bucket}:${params.key}`;
+        const { redisKeyPrefix: redisKeyPrefix3 } = getEnvConfig();
+        const key = `${redisKeyPrefix3}:${params.bucket}:${params.key}`;
         const response = await fetch(`${this.endpoint}/pipeline`, {
           method: "POST",
           headers: {
@@ -3889,17 +3889,16 @@ var init_recordingStore = __esm({
 // backend/src/routes/recording.routes.ts
 import { Router as Router5 } from "express";
 import crypto5 from "crypto";
+import jwt3 from "jsonwebtoken";
 import multer2 from "multer";
 import mongoose8 from "mongoose";
-var MAX_RECORDING_SIZE_BYTES, SIGNED_RECORDING_TOKEN_TTL_SEC, redisKeyPrefix3, SIGNED_RECORDING_NAMESPACE, runtimeStore3, parseOptionalQuestionIndex, upload2, router6, signedRecordingKey, issueSignedRecordingToken, readSignedRecordingToken, recording_routes_default;
+var MAX_RECORDING_SIZE_BYTES, SIGNED_RECORDING_TOKEN_TTL_SEC, parseOptionalQuestionIndex, upload2, router6, getSignedRecordingSecret, issueSignedRecordingToken, readSignedRecordingToken, recording_routes_default;
 var init_recording_routes = __esm({
   "backend/src/routes/recording.routes.ts"() {
     "use strict";
     init_auth_middleware();
     init_rateLimit_middleware();
     init_interviewSession();
-    init_runtimeStore();
-    init_env();
     init_recordingStore();
     MAX_RECORDING_SIZE_BYTES = Number.parseInt(
       process.env.MAX_RECORDING_FILE_SIZE_BYTES ?? `${25 * 1024 * 1024}`,
@@ -3909,9 +3908,6 @@ var init_recording_routes = __esm({
       60,
       Number.parseInt(process.env.RECORDING_SIGNED_URL_TTL_SEC ?? "600", 10)
     );
-    ({ redisKeyPrefix: redisKeyPrefix3 } = getEnvConfig());
-    SIGNED_RECORDING_NAMESPACE = `${redisKeyPrefix3}:recording:signed`;
-    runtimeStore3 = getRuntimeStore();
     parseOptionalQuestionIndex = (value) => {
       if (typeof value === "number" && Number.isInteger(value)) {
         return value;
@@ -3941,33 +3937,40 @@ var init_recording_routes = __esm({
       }
     });
     router6 = Router5();
-    signedRecordingKey = (token) => `${SIGNED_RECORDING_NAMESPACE}:${token}`;
-    issueSignedRecordingToken = async (params) => {
-      const token = crypto5.randomBytes(24).toString("hex");
-      await runtimeStore3.setEx(
-        signedRecordingKey(token),
-        JSON.stringify({
-          fileId: params.fileId,
-          userId: params.userId,
-          issuedAt: Date.now()
-        }),
-        SIGNED_RECORDING_TOKEN_TTL_SEC
-      );
-      return token;
-    };
-    readSignedRecordingToken = async (token) => {
-      const raw = await runtimeStore3.get(signedRecordingKey(token));
-      if (!raw) {
-        return null;
+    getSignedRecordingSecret = () => {
+      const secret = (process.env.JWT_SECRET ?? "").trim();
+      if (!secret) {
+        throw new Error("JWT secret is not configured");
       }
+      return `${secret}:recording-signed`;
+    };
+    issueSignedRecordingToken = (params) => jwt3.sign(
+      {
+        type: "recording",
+        fileId: params.fileId,
+        userId: params.userId,
+        nonce: crypto5.randomBytes(12).toString("hex")
+      },
+      getSignedRecordingSecret(),
+      {
+        algorithm: "HS256",
+        expiresIn: SIGNED_RECORDING_TOKEN_TTL_SEC
+      }
+    );
+    readSignedRecordingToken = (token) => {
       try {
-        const parsed = JSON.parse(raw);
-        if (typeof parsed.fileId !== "string" || typeof parsed.userId !== "string") {
+        const decoded = jwt3.verify(token, getSignedRecordingSecret(), {
+          algorithms: ["HS256"]
+        });
+        const fileId = typeof decoded.fileId === "string" ? decoded.fileId : "";
+        const userId = typeof decoded.userId === "string" ? decoded.userId : "";
+        const tokenType = typeof decoded.type === "string" ? decoded.type : "";
+        if (!fileId || !userId || tokenType !== "recording") {
           return null;
         }
         return {
-          fileId: parsed.fileId,
-          userId: parsed.userId
+          fileId,
+          userId
         };
       } catch {
         return null;
@@ -3976,13 +3979,13 @@ var init_recording_routes = __esm({
     router6.get("/signed/:token", async (req, res) => {
       try {
         const token = (req.params.token ?? "").trim();
-        if (!/^[a-f0-9]{24,80}$/i.test(token)) {
+        if (!/^[A-Za-z0-9._-]{24,2048}$/.test(token)) {
           return res.status(400).json({
             success: false,
             message: "Invalid signed recording token"
           });
         }
-        const payload = await readSignedRecordingToken(token);
+        const payload = readSignedRecordingToken(token);
         if (!payload) {
           return res.status(404).json({
             success: false,
@@ -4034,7 +4037,7 @@ var init_recording_routes = __esm({
             message: "Recording not found"
           });
         }
-        const token = await issueSignedRecordingToken({
+        const token = issueSignedRecordingToken({
           fileId,
           userId: user._id
         });

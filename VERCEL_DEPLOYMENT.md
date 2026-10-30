@@ -1,55 +1,33 @@
-# Vercel Deployment (Single Project: Frontend + API)
+# Vercel Frontend Deployment
 
-## 1. Pre-deploy locally
+Vercel hosts the Vite frontend only. Deploy the Express API and its persistent feedback queue worker to Render; see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for the full setup.
 
-Run from repo root:
+## Vercel project settings
 
-```bash
-npm run check:prod
-```
+1. Import the GitHub repository.
+2. Set **Root Directory** to `frontend`.
+3. Keep the Vite defaults:
+   - Install: `npm install`
+   - Build: `npm run build`
+   - Output: `dist`
+4. Set the Production environment variable:
 
-## 2. Vercel project settings
+   ```text
+   VITE_API_URL=https://YOUR-RENDER-SERVICE.onrender.com
+   ```
 
-Use the repo root as project root. `vercel.json` already configures:
+   Set the API origin only; the app adds `/api`. Add `VITE_GOOGLE_CLIENT_ID` if Google sign-in is enabled. Preview deployments need their own environment variables and their origins must be allowed by the backend if used.
 
-- install command
-- build command
-- frontend output directory
-- API routing to `api/index.js`
-- SPA fallback routing
+5. Deploy. Redeploy after changing any `VITE_*` setting.
 
-## 3. Environment variables in Vercel
+Do not set `VITE_API_URL=/api` for this split deployment: the Vercel project serves only the frontend and does not proxy API calls.
 
-Set these for **Production** (and Preview if you test preview deploys):
+## Verify
 
-- `NODE_ENV=production`
-- `MONGO_URI=...`
-- `JWT_SECRET=...` (minimum 32 chars)
-- `OPENROUTER_API_KEY=...`
-- `OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct:free` (optional override)
-- `FRONTEND_URL=https://your-domain.vercel.app`
-- `CORS_ORIGINS=https://your-domain.vercel.app`
-- `MAX_RESUME_FILE_SIZE_BYTES=2097152` (optional)
-- `REDIS_REST_URL=...` and `REDIS_REST_TOKEN=...` (optional but recommended, set together)
+- Frontend loads at the Vercel URL.
+- `https://YOUR-RENDER-SERVICE.onrender.com/api/health` returns HTTP 200.
+- `https://YOUR-RENDER-SERVICE.onrender.com/api/ready` returns HTTP 200 when MongoDB is available.
+- Browser DevTools shows API requests going to the Render API origin.
+- Signup/login and refresh work after a reload. For the most reliable cookie behavior, use Vercel and Render custom domains under the same registrable domain.
 
-Frontend:
-
-- `VITE_API_URL=/api` (recommended for same-project API)
-
-## 4. Deploy
-
-Push to your connected branch in Vercel, or deploy from CLI.
-
-## 5. Post-deploy checks
-
-Verify:
-
-- `GET /api/health` returns `200`
-- `GET /api/ready` returns `200`
-- Signup/login works
-- Interview question generation works
-- Feedback generation works
-
-## 6. Known warning
-
-Frontend build currently warns about a large JS chunk. This does not block deploy, but code-splitting can improve load performance.
+Use the repository root directory only if you intend to deploy the legacy bundled/serverless configuration; that is not the recommended deployment for this project because its feedback worker needs a persistent process.

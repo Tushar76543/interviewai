@@ -56,7 +56,7 @@ Each answer is evaluated across three dimensions:
 ## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js 18+ and npm
+- Node.js 20.x and npm
 - MongoDB database (local or cloud)
 - OpenRouter API key ([Get one here](https://openrouter.ai/))
 
@@ -164,24 +164,15 @@ The application includes advanced voice capabilities:
 
 ## 🚢 Deployment
 
-### Frontend (Vercel)
-1. Push your code to GitHub
-2. Import project in Vercel
-3. Set environment variable:
-   - `VITE_API_URL`: Your backend URL
+Recommended production setup:
 
-### Backend (Render)
-1. Create a new Web Service on Render
-2. Connect your GitHub repository
-3. Set environment variables:
-   - `MONGO_URI`
-   - `OPENROUTER_API_KEY`
-   - `JWT_SECRET`
-   - `FRONTEND_URL`
-   - `NODE_ENV=production`
-4. Deploy!
+- **Frontend:** Vercel (`frontend` directory)
+- **API and feedback queue worker:** Render (persistent Node web service)
+- **Database:** MongoDB Atlas
+- **Queue/runtime state:** Upstash Redis
+- **AI provider:** OpenRouter
 
-For detailed deployment instructions, see [ENV_SETUP.md](./ENV_SETUP.md)
+Follow [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for provider configuration, environment variables, and post-deploy verification. See [ENV_SETUP.md](./ENV_SETUP.md) for the environment variable reference.
 
 ## 🤝 Contributing
 

@@ -1,124 +1,39 @@
-# ✅ Vercel Deployment Checklist
+# Production Deployment Checklist
 
-## Before Deploying
+## Before deploying
 
-- [ ] **Bundle the API** (if using Vercel serverless)
-  ```bash
-  npm run bundle:api
-  ```
+- [ ] MongoDB Atlas cluster and least-privilege database user are ready.
+- [ ] Atlas Network Access allows the Render service's outbound IP addresses.
+- [ ] Upstash Redis REST URL and token are ready.
+- [ ] OpenRouter API key is ready.
+- [ ] Two distinct JWT secrets of at least 32 characters have been generated.
+- [ ] Secrets are not committed and are entered only in the provider dashboards.
 
-- [ ] **Commit the bundled API**
-  ```bash
-  git add api/index.js
-  git commit -m "Update API bundle for deployment"
-  ```
+## Render API and feedback worker
 
-- [ ] **Push to GitHub**
-  ```bash
-  git push origin main
-  ```
+- [ ] Create a Render Blueprint from the repository root using `render.yaml`.
+- [ ] Use a persistent paid web-service instance for production; a sleeping free instance can delay queued feedback.
+- [ ] Set `MONGO_URI`, `JWT_SECRET`, `JWT_REFRESH_SECRET`, `OPENROUTER_API_KEY`, `FRONTEND_URL`, `CORS_ORIGINS`, `REDIS_REST_URL`, and `REDIS_REST_TOKEN`.
+- [ ] Confirm the Render build succeeds and the service starts.
+- [ ] Confirm `/api/health` returns HTTP 200.
+- [ ] Confirm `/api/ready` returns HTTP 200 and reports `"status":"ready"`.
 
-## In Vercel Dashboard
+## Vercel frontend
 
-- [ ] **1. Import project from GitHub**
-  - Repository: `Tushar76543/interviewai`
+- [ ] Import the repository with Root Directory set to `frontend`.
+- [ ] Build command is `npm run build`; output directory is `dist`.
+- [ ] Set `VITE_API_URL` to the Render API origin, e.g. `https://interviewai-api.onrender.com` (do not add `/api`).
+- [ ] Set `VITE_GOOGLE_CLIENT_ID` if Google sign-in is enabled.
+- [ ] Deploy and open the production site.
 
-- [ ] **2. Configure Build Settings**
-  - Framework Preset: `Vite` (or Other if deploying from root)
-  - Root Directory: `frontend` (or leave blank if deploying from root)
-  - Build Command: `npm run build` (or leave default)
-  - Output Directory: `dist` (or `frontend/dist` if deploying from root)
+## After deploying
 
-- [ ] **3. Set Environment Variables**
-  
-  **Required for Build (Frontend):**
-  ```
-  VITE_API_URL = /api
-  ```
-  OR (if backend is on Render):
-  ```
-  VITE_API_URL = https://your-backend.onrender.com/api
-  ```
+- [ ] Set Render `FRONTEND_URL` and `CORS_ORIGINS` to the exact production frontend origin.
+- [ ] Redeploy/restart the Render service after changing those values.
+- [ ] Test signup, login, logout, and login persistence after a full page reload.
+- [ ] Test interview creation and ensure feedback jobs complete.
+- [ ] Check browser Network/Console and Render logs for CORS, cookies, Redis, MongoDB, and OpenRouter errors.
+- [ ] Prefer Vercel and Render custom domains under the same registrable domain for reliable browser cookie behavior.
+- [ ] Confirm recording storage and retention are suitable for production.
 
-  **Required for Runtime (Backend/API Functions):**
-  ```
-  MONGO_URI = mongodb+srv://...
-  OPENROUTER_API_KEY = sk-or-v1-...
-  JWT_SECRET = your-secret-key
-  FRONTEND_URL = https://your-app.vercel.app
-  NODE_ENV = production
-  ```
-
-- [ ] **4. Click "Deploy"**
-
-## After First Deployment
-
-- [ ] **Get your Vercel URL** (e.g., `https://interviewai-xyz.vercel.app`)
-
-- [ ] **Update FRONTEND_URL environment variable**
-  - Go to Project Settings → Environment Variables
-  - Update `FRONTEND_URL` with your actual Vercel URL
-  - Redeploy
-
-## Testing the Deployment
-
-- [ ] **Frontend loads** (visit your Vercel URL)
-- [ ] **Can access login page** (`/login`)
-- [ ] **Can access signup page** (`/signup`)
-- [ ] **Can create account** (tests MongoDB connection)
-- [ ] **Can login** (tests JWT)
-- [ ] **Can start interview** (tests OpenRouter API)
-- [ ] **Can receive AI questions** (tests full backend integration)
-
-## Troubleshooting
-
-If deployment fails:
-
-1. **Check Build Logs**
-   - In Vercel, click on failed deployment
-   - Expand "Building" section
-   - Look for error messages
-
-2. **Check Function Logs**
-   - Go to "Functions" tab in Vercel
-   - Monitor real-time logs during testing
-
-3. **Common Issues:**
-   - ❌ `VITE_API_URL` not set → Set in environment variables
-   - ❌ `api/index.js` missing → Run `npm run bundle:api` and commit
-   - ❌ MongoDB connection fails → Check `MONGO_URI` is correct
-   - ❌ OpenRouter fails → Check `OPENROUTER_API_KEY` is correct
-   - ❌ CORS errors → Check `FRONTEND_URL` matches your Vercel URL
-
-4. **Force Redeploy:**
-   - Go to deployments
-   - Click "..." on latest deployment
-   - Click "Redeploy"
-   - Check "Clear Build Cache"
-
-## Alternative: Deploy Backend to Render
-
-If Vercel serverless functions are problematic:
-
-1. **Deploy frontend only to Vercel**
-   - Root Directory: `frontend`
-   - Build Command: `npm run build`
-   - Environment Variable: `VITE_API_URL=https://your-backend.onrender.com/api`
-
-2. **Deploy backend to Render**
-   - Create Web Service
-   - Root Directory: `backend`
-   - Build Command: `npm install && npm run build`
-   - Start Command: `npm start`
-   - Set all backend environment variables
-
-## Notes
-
-- 📝 Environment variables are only applied to NEW deployments
-- 📝 After changing env vars, you must redeploy
-- 📝 `VITE_*` variables are embedded during build time
-- 📝 Other variables are used at runtime
-
----
-
-**Status:** Ready for deployment ✨
+For detailed instructions, see [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md).

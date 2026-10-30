@@ -8,29 +8,7 @@ const configuredApiBaseUrl =
       ? normalizedApiUrl
       : `${normalizedApiUrl}/api`;
 
-const resolveApiBaseUrl = () => {
-  if (
-    configuredApiBaseUrl === "/api" ||
-    import.meta.env.DEV ||
-    typeof window === "undefined" ||
-    !/^https?:\/\//i.test(configuredApiBaseUrl)
-  ) {
-    return configuredApiBaseUrl;
-  }
-
-  try {
-    const configuredOrigin = new URL(configuredApiBaseUrl).origin;
-    if (configuredOrigin !== window.location.origin) {
-      return "/api";
-    }
-  } catch {
-    return "/api";
-  }
-
-  return configuredApiBaseUrl;
-};
-
-export const apiBaseUrl = resolveApiBaseUrl();
+export const apiBaseUrl = configuredApiBaseUrl;
 
 export const resolveApiAssetUrl = (value: string) => {
   const trimmed = value.trim();
@@ -55,6 +33,7 @@ export const resolveApiAssetUrl = (value: string) => {
 const CSRF_COOKIE_NAME = "csrf_token";
 
 let csrfBootstrapPromise: Promise<void> | null = null;
+let csrfTokenValue = "";
 
 const readCookie = (name: string) => {
   if (typeof document === "undefined") return "";
@@ -67,7 +46,7 @@ const readCookie = (name: string) => {
   return decodeURIComponent(found.slice(encodedName.length));
 };
 
-export const getCsrfToken = () => readCookie(CSRF_COOKIE_NAME);
+export const getCsrfToken = () => readCookie(CSRF_COOKIE_NAME) || csrfTokenValue;
 
 export const ensureCsrfToken = async () => {
   if (getCsrfToken()) {
@@ -79,7 +58,24 @@ export const ensureCsrfToken = async () => {
       method: "GET",
       credentials: "include",
     })
-      .then(() => undefined)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`CSRF bootstrap failed with status ${response.status}`);
+        }
+
+        const payload: unknown = await response.json();
+        if (
+          typeof payload !== "object" ||
+          payload === null ||
+          !("csrfToken" in payload) ||
+          typeof payload.csrfToken !== "string" ||
+          !payload.csrfToken
+        ) {
+          throw new Error("CSRF bootstrap response did not include a token");
+        }
+
+        csrfTokenValue = payload.csrfToken;
+      })
       .finally(() => {
         csrfBootstrapPromise = null;
       });

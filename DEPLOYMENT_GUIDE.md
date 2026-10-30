@@ -1,235 +1,113 @@
-# 🚀 Vercel Deployment Guide - Interview AI
+# Production Deployment Guide
 
-## ⚠️ Current Deployment Issues & Fixes
+This repository is configured for a split deployment:
 
-### Issue 1: React Hydration Error (#418)
-**Symptoms:** 
-- 401 Unauthorized errors
-- "Minified React error #418" 
-- App not loading properly
+- **Frontend:** Vercel (Vite static site)
+- **API and feedback queue worker:** Render (long-running Node web service)
+- **Database:** MongoDB Atlas
+- **Queue and shared runtime state:** Upstash Redis
+- **AI provider:** OpenRouter
 
-**Root Cause:** Missing or incorrect environment variables + build configuration
+Do not deploy the repository root as a Vercel serverless app for the recommended setup. The feedback queue worker needs a persistent Node process.
 
----
+## 1. Prepare external services
 
-## 📝 Deployment Steps (CORRECT METHOD)
+### MongoDB Atlas
 
-### Option A: Deploy Frontend + Backend Separately (RECOMMENDED)
+1. Create a production cluster and a dedicated database user.
+2. Save the connection URI for the Render `MONGO_URI` variable.
+3. Configure Atlas Network Access to allow the Render service's outbound IP addresses. If your Render plan does not provide stable outbound IPs, Atlas may require a broader IP allowlist; use strong unique database credentials and prefer Render static outbound IPs for production.
 
-#### **1. Deploy Frontend to Vercel**
+### Upstash Redis
 
-1. **Push your code to GitHub** (already done ✅)
+1. Create a Redis database in a region near the Render service.
+2. Copy its **REST URL** and **REST token**. Do not use the Redis TCP URL/password for these variables.
+3. These credentials are used by the feedback queue and shared rate-limit/runtime state. Configure both variables; do not configure only one.
 
-2. **Import project in Vercel:**
-   - Go to https://vercel.com/new
-   - Import your `Tushar76543/interviewai` repository
-   - Select **Frontend framework**: Vite
-   - Set **Root Directory**: `frontend`
-   - Leave Build Command as default (`npm run build`)
-   - Leave Output Directory as default (`dist`)
+### OpenRouter
 
-3. **Configure Environment Variables:**
-   - Go to Project Settings → Environment Variables
-   - Add the following:
+Create an API key and keep it available for Render. The backend can return heuristic feedback when AI is unavailable, but the AI features need this key.
 
-   ```
-   Variable Name: VITE_API_URL
-   Value: https://your-backend-url.onrender.com/api
-   ```
+## 2. Deploy the backend to Render
 
-   **IMPORTANT**: Replace `your-backend-url` with your actual Render backend URL
+1. Push the project to the GitHub repository.
+2. In Render, choose **New → Blueprint** and connect the repository. The repository's `render.yaml` defines the API service. Keep the service root directory at the repository root.
+3. Choose the paid `starter` instance for a persistent service. A free instance may sleep, delaying queued feedback until the service wakes.
+4. Add the values requested by the Blueprint:
+   - `MONGO_URI`
+   - `JWT_SECRET`
+   - `JWT_REFRESH_SECRET`
+   - `OPENROUTER_API_KEY`
+   - `FRONTEND_URL`
+   - `CORS_ORIGINS`
+   - `REDIS_REST_URL`
+   - `REDIS_REST_TOKEN`
+5. Generate two different random secrets, each at least 32 characters. For example, run this twice in PowerShell and use a different output for each secret:
 
-4. **Deploy!**
-
-#### **2. Deploy Backend to Render**
-
-1. **Create a new Web Service:**
-   - Go to https://render.com
-   - Click "New" → "Web Service"
-   - Connect your GitHub repository
-
-2. **Configure Build Settings:**
-   - **Root Directory**: `backend`
-   - **Build Command**: `npm install && npm run build`
-   - **Start Command**: `npm start`
-   - **Environment**: Node
-
-3. **Set Environment Variables:**
-   ```
-   MONGO_URI=mongodb+srv://...your-connection-string
-   OPENROUTER_API_KEY=sk-or-v1-...your-api-key
-   JWT_SECRET=your-super-secret-jwt-key-change-this
-   FRONTEND_URL=https://your-vercel-app.vercel.app
-   NODE_ENV=production
-   PORT=5000
+   ```powershell
+   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
    ```
 
-4. **Deploy!**
+6. For the first deployment, `FRONTEND_URL` and `CORS_ORIGINS` can temporarily contain the Vercel production URL you plan to use. Update them to the exact final frontend origin after Vercel is deployed.
+7. Deploy. The health check is `/api/health`; after deployment also check `https://YOUR-RENDER-SERVICE.onrender.com/api/ready`. Readiness should return HTTP 200 and `"status":"ready"` when MongoDB is reachable.
 
----
+The Render Blueprint uses the repository root and runs:
 
-### Option B: Deploy Everything to Vercel (Serverless)
-
-If you want to keep everything on Vercel (less recommended due to serverless limitations):
-
-#### **1. Configure Project Root**
-
-1. **Import project in Vercel** (use repository root, not frontend subdirectory)
-
-2. **Override Build Settings:**
-   - **Build Command**: `npm run build`
-   - **Output Directory**: `frontend/dist`
-   - **Install Command**: `npm install`
-
-3. **Set Environment Variables:**
-
-   **For Frontend (used during build):**
-   ```
-   VITE_API_URL=/api
-   ```
-
-   **For Backend (used at runtime):**
-   ```
-   MONGO_URI=mongodb+srv://...your-connection-string
-   OPENROUTER_API_KEY=sk-or-v1-...your-api-key
-   JWT_SECRET=your-super-secret-jwt-key
-   NODE_ENV=production
-   ```
-
-4. **Important: Bundle API before each deployment**
-   
-   Run locally before pushing:
-   ```bash
-   npm run bundle:api
-   ```
-   
-   This creates `api/index.js` which Vercel will use as a serverless function.
-
-5. **Commit and push:**
-   ```bash
-   git add api/index.js
-   git commit -m "Update bundled API"
-   git push
-   ```
-
----
-
-## 🔧 Troubleshooting Common Errors
-
-### Error: "401 Unauthorized" on `/vite.svg`
-**Solution:** This is a red herring. The real issue is missing environment variables or build failure. Check Vercel build logs.
-
-### Error: "Minified React error #418"
-**Solution:** 
-1. Ensure `VITE_API_URL` is set in Vercel environment variables
-2. Rebuild the deployment after adding env vars
-3. Check browser console for actual error details
-
-### Error: "500 Internal Server Error" on API calls
-**Solution:**
-1. Check that all backend environment variables are set (especially `MONGO_URI` and `OPENROUTER_API_KEY`)
-2. View Function Logs in Vercel dashboard
-3. Ensure `api/index.js` is committed and up to date
-
-### Error: "Module not found" during build
-**Solution:**
-1. Make sure you ran `npm run bundle:api` before deploying
-2. Ensure `api/index.js` is in your git repository
-3. Check that all dependencies are in `package.json`, not devDependencies
-
-### Build fails with timeout
-**Solution:**
-1. Increase function timeout in `vercel.json` (already set to 30s)
-2. Consider moving backend to Render (recommended)
-3. Optimize bundle size by removing unused dependencies
-
----
-
-## ✅ Verification Checklist
-
-After deployment, verify:
-
-- [ ] Frontend loads at `https://your-app.vercel.app`
-- [ ] Can access signup page
-- [ ] Can create an account (tests database connection)
-- [ ] Can login (tests JWT and API)
-- [ ] Can start an interview (tests OpenRouter API)
-- [ ] Check Vercel Functions logs for any errors
-
----
-
-## 🎯 Recommended Architecture
-
-**BEST PRACTICE:**
-
-```
-Frontend (Vercel)
-    ↓
-   API calls over HTTPS
-    ↓
-Backend (Render Web Service)
-    ↓
-MongoDB Atlas
-OpenRouter API
+```text
+npm --prefix backend ci && npm --prefix backend run build
+npm --prefix backend start
 ```
 
-**Why?**
-- ✅ No serverless cold starts
-- ✅ Better for WebSocket/long-running connections
-- ✅ Easier debugging
-- ✅ Better error logging
-- ✅ More predictable costs
+Render supplies `PORT`; do not hardcode a production port.
 
----
+## 3. Deploy the frontend to Vercel
 
-## 📞 Still Having Issues?
+1. Import the same GitHub repository in Vercel.
+2. Set **Root Directory** to `frontend` and enable **Include source files outside of the Root Directory** only if Vercel asks (the frontend does not need backend source).
+3. Use Vercel's Vite defaults:
+   - Build command: `npm run build`
+   - Output directory: `dist`
+   - Install command: `npm install`
+4. Set these Vercel environment variables for Production (and Preview if you want to test previews):
+   - `VITE_API_URL=https://YOUR-RENDER-SERVICE.onrender.com`
+   - `VITE_GOOGLE_CLIENT_ID=your-google-web-client-id.apps.googleusercontent.com` (only if Google sign-in is enabled)
+5. Deploy. `VITE_API_URL` is the backend origin; the frontend adds `/api` automatically. Redeploy after changing any `VITE_*` value.
 
-1. **Check Vercel Build Logs:**
-   - Go to your deployment in Vercel
-   - Click on the deployment
-   - View "Building" logs
+The frontend calls the Render API directly, includes credentials, and bootstraps the CSRF token from the API response. For best browser-cookie compatibility in production, use custom domains under the same registrable domain, for example `app.example.com` on Vercel and `api.example.com` on Render. Set `VITE_API_URL` to the API custom domain and set Render's frontend/CORS origins to the app custom domain. With the default `vercel.app` and `onrender.com` domains, some browsers' third-party-cookie restrictions may prevent login from persisting.
 
-2. **Check Vercel Function Logs:**
-   - Go to your project in Vercel
-   - Navigate to "Functions" tab
-   - View real-time logs
+## 4. Set final production origins
 
-3. **Check Browser Console:**
-   - Open browser DevTools (F12)
-   - Go to Console tab
-   - Look for error messages
+After you know the final Vercel URL (or custom domain), update the Render environment:
 
-4. **Common fixes:**
-   - Redeploy after setting environment variables
-   - Clear Vercel build cache (in deployment settings)
-   - Ensure git repository is up to date
-
----
-
-## 🔄 Quick Fix Commands
-
-If deploying with Option B (all on Vercel), run these before each deployment:
-
-```bash
-# Bundle the API
-npm run bundle:api
-
-# Commit the bundled API
-git add api/index.js
-git commit -m "Update API bundle"
-
-# Push to trigger deployment
-git push
+```text
+FRONTEND_URL=https://YOUR-FRONTEND-DOMAIN
+CORS_ORIGINS=https://YOUR-FRONTEND-DOMAIN
 ```
 
----
+Use the origin only: no path and no trailing `/api`. For a custom domain, use that stable production origin. Add preview origins to `CORS_ORIGINS` only if you intentionally allow those deployments to access production data. Save the changes and redeploy/restart the Render service.
 
-## 📚 Additional Resources
+## 5. Optional Google sign-in
 
-- [Vercel Deployment Docs](https://vercel.com/docs)
-- [Vite Environment Variables](https://vitejs.dev/guide/env-and-mode.html)
-- [Render Deployment Guide](https://render.com/docs)
+If Google sign-in is used:
 
----
+1. Set `GOOGLE_CLIENT_ID` in Render.
+2. Set the same client ID as `VITE_GOOGLE_CLIENT_ID` in Vercel.
+3. Add the production frontend domain to the OAuth client's authorized JavaScript origins.
+4. Redeploy the frontend after changing its variable.
 
-**Last Updated:** 2026-02-15
+## 6. Verify the deployment
+
+1. Open `https://YOUR-RENDER-SERVICE.onrender.com/api/health` and confirm HTTP 200.
+2. Open `https://YOUR-RENDER-SERVICE.onrender.com/api/ready` and confirm HTTP 200 with `"status":"ready"`.
+3. Open the Vercel site and test signup, login, logout, and refresh after a page reload.
+4. Start an interview, submit an answer, and confirm the feedback job reaches `completed`.
+5. Check Render logs for startup, MongoDB, Redis, CORS, or OpenRouter errors.
+6. Verify browser DevTools shows API requests going to the configured Render API origin, not back to the Vercel `/api` path.
+
+## Production notes
+
+- Never put MongoDB, JWT, Redis, or OpenRouter secrets in Vercel `VITE_*` variables; Vite variables are public in the built frontend.
+- Keep `REDIS_REST_URL` and `REDIS_REST_TOKEN` configured together. Without Redis the service falls back to in-memory state, which is not durable across restarts or shared across multiple instances.
+- Uploaded recordings use the configured recording store; verify its production persistence/retention configuration before relying on recordings as durable data.
+- Restrict Atlas network access as much as your Render plan allows, use a least-privilege database user, and rotate any credentials that have ever been committed or shared.
+- Do not deploy the root `vercel.json` API/serverless configuration for this architecture. In Vercel set the project Root Directory to `frontend`; it uses `frontend/vercel.json`.

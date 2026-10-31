@@ -2,7 +2,7 @@ services:
   - type: web
     name: interviewai-api
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm --prefix backend ci && npm --prefix backend run build
     startCommand: npm --prefix backend start
     healthCheckPath: /api/health

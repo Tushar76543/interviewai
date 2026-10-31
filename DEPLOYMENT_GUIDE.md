@@ -32,7 +32,7 @@ Create an API key and keep it available for Render. The backend can return heuri
 
 1. Push the project to the GitHub repository.
 2. In Render, choose **New → Blueprint** and connect the repository. The repository's `render.yaml` defines the API service. Keep the service root directory at the repository root.
-3. Choose the paid `starter` instance for a persistent service. A free instance may sleep, delaying queued feedback until the service wakes.
+3. The Blueprint currently uses the `free` plan. It may sleep and delay queued feedback until the service wakes; use the paid `starter` plan for a persistent production service.
 4. Add the values requested by the Blueprint:
    - `MONGO_URI`
    - `JWT_SECRET`
@@ -54,7 +54,7 @@ Create an API key and keep it available for Render. The backend can return heuri
 The Render Blueprint uses the repository root and runs:
 
 ```text
-npm --prefix backend ci && npm --prefix backend run build
+npm --prefix backend ci --include=dev && npm --prefix backend run build
 npm --prefix backend start
 ```
 

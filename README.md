@@ -53,6 +53,14 @@ Each answer is evaluated across three dimensions:
 - **JWT** for secure authentication
 - **bcrypt** for password hashing
 
+### Java backend implementation
+- **Java 21** with **Spring Boot 3**
+- **Spring Security** and **Spring Data MongoDB**
+- **OpenRouter** integration with heuristic feedback fallback
+- **Apache PDFBox** for resume parsing
+
+The Java backend is an alternative implementation in `backend-java`. The currently deployed API remains the Node.js/Express backend.
+
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -111,6 +119,20 @@ npm run dev
 5. **Open your browser**
 Navigate to `http://localhost:5173` and start practicing!
 
+### Run the Java backend
+
+Install Java 21 and Maven, configure the Java backend environment variables as described in [`backend-java/README.md`](./backend-java/README.md), then run:
+
+```bash
+npm run dev:java
+```
+
+To build the Java backend without starting the frontend:
+
+```bash
+npm run build:java
+```
+
 ## 📁 Project Structure
 
 ```
@@ -126,6 +148,7 @@ interviewai/
 │   │   └── app.ts         # Express app setup
 │   └── package.json
 │
+├── backend-java/            # Alternative Java 21 / Spring Boot backend
 ├── frontend/               # React frontend
 │   ├── src/
 │   │   ├── pages/         # Route components
@@ -173,6 +196,8 @@ Recommended production setup:
 - **AI provider:** OpenRouter
 
 Follow [DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md) for provider configuration, environment variables, and post-deploy verification. See [ENV_SETUP.md](./ENV_SETUP.md) for the environment variable reference.
+
+The Java backend is included as an alternative implementation; it is not part of this current Vercel + Render deployment.
 
 ## 🤝 Contributing
 

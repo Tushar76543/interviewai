@@ -1,0 +1,48 @@
+server:
+  port: 5000
+
+spring:
+  application:
+    name: interviewai-backend
+  data:
+    mongodb:
+      uri: ${MONGO_URI:mongodb://127.0.0.1:27017/interviewai}
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:dev-secret-key-replace-in-production-at-least-32-chars-long-enough-for-sha256}
+    access-token-ttl-ms: 900000 # 15 minutes
+    refresh-token-ttl-ms: 1209600000 # 14 days
+  cors:
+    allowed-origins:
+      - "http://localhost:5173"
+      - "http://127.0.0.1:5173"
+      - "http://localhost:5000"
+  ai:
+    openrouter-api-key: ${OPENROUTER_API_KEY:}
+    endpoint: "https://openrouter.ai/api/v1/chat/completions"
+    model: ${OPENROUTER_MODEL:meta-llama/llama-3.3-70b-instruct:free}
+    fallback-models:
+      - "meta-llama/llama-3.1-8b-instruct:free"
+      - "mistralai/mistral-7b-instruct:free"
+    timeout-ms: 8000
+    circuit-breaker-threshold: 5
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,metrics"
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html

@@ -1,6 +1,8 @@
 node_modules/
 dist/
 frontend/dist/
+backend-java/target/
+backend-java/uploads/
 .env
 backend/.env
 frontend/.env

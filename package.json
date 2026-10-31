@@ -7,9 +7,12 @@
     },
     "scripts": {
         "dev": "concurrently \"npm --prefix frontend run dev\" \"npm --prefix backend run dev\"",
+        "dev:java": "concurrently \"npm --prefix frontend run dev\" \"npm run start:java\"",
         "start": "npm --prefix backend start",
+        "start:java": "mvn -f backend-java/pom.xml spring-boot:run",
         "lint": "npm --prefix frontend run lint",
         "build:backend": "npm --prefix backend run build",
+        "build:java": "mvn -f backend-java/pom.xml clean package -DskipTests",
         "build:frontend": "npm --prefix frontend run build",
         "build": "npm run build:backend && npm run build:frontend && npm run bundle:api",
         "bundle:api": "npx esbuild backend/src/serverless.ts --bundle --platform=node --packages=external --outfile=api/index.js --format=esm",
